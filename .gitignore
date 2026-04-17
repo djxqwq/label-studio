@@ -86,3 +86,4 @@ web/libs/editor/tests/coverage
 .cache
 docs/*
 web/libs/editor/public/files/*.mp*
+.cursor
