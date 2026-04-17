@@ -9,8 +9,16 @@ export const API_CONFIG = {
     me: "/current-user/whoami",
     hotkeys: "GET:/current-user/hotkeys/",
     updateHotkeys: "PATCH:/current-user/hotkeys/",
+    userOrganizations: "GET:/users/:pk/organizations",
+    addUserToOrganization: "POST:/users/:pk/organizations/add",
+    removeUserFromOrganization: "DELETE:/users/:pk/organizations/:orgId",
 
     // Organization
+    organizations: "/organizations",
+    createOrganization: "POST:/organizations",
+    allOrganizations: "GET:/organizations/all",
+    deleteOrganization: "DELETE:/organizations/:pk/delete",
+    updateUserActiveOrganization: "PATCH:/organizations/user/:pk/active-organization",
     memberships: "/organizations/:pk/memberships",
     userMemberships: "/organizations/:pk/memberships/:userPk",
     inviteLink: "/invite",

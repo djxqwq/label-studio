@@ -28,18 +28,24 @@ class BaseUserSerializer(FlexFieldsModelSerializer):
         title = organization.title
         email = ''
 
-        if organization.created_by is not None and organization.created_by.email is not None:
-            email = organization.created_by.email
+        if organization.created_by_id is not None:
+            try:
+                email = organization.created_by.email or ''
+            except Exception:
+                email = ''
 
         return {'title': title, 'email': email}
 
     def _is_deleted(self, instance):
         if 'user' in self.context:
             org_id = self.context['user'].active_organization_id
+            is_superuser = self.context['user'].is_superuser
         elif 'request' in self.context:
             org_id = self.context['request'].user.active_organization_id
+            is_superuser = self.context['request'].user.is_superuser
         else:
             org_id = None
+            is_superuser = False
 
         if not org_id:
             return False
@@ -55,6 +61,10 @@ class BaseUserSerializer(FlexFieldsModelSerializer):
             None,
         )
         if not organization_member_for_user:
+            # Superusers can see users outside their active organization;
+            # absence of membership in the active org does not mean the user is deleted.
+            if is_superuser:
+                return False
             return True
         return bool(organization_member_for_user.deleted_at)
 
@@ -92,6 +102,7 @@ class BaseUserSerializer(FlexFieldsModelSerializer):
             'active_organization_meta',
             'allow_newsletters',
             'date_joined',
+            'is_superuser',
         )
 
 

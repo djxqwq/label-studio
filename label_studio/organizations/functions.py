@@ -24,8 +24,33 @@ def create_organization(title, created_by, legacy_api_tokens_enabled=False, **kw
 
 
 def destroy_organization(org):
+    from data_export.models import ConvertedFormat
+    from labels_manager.models import Label, LabelLink
+    from ml_models.models import ModelInterface, ThirdPartyModelVersion, ModelRun
+    from ml_model_providers.models import ModelProviderConnection
+    from session_policy.models import SessionTimeoutPolicy
+    from webhooks.models import Webhook
+
     with temporary_disconnect_all_signals():
+        # Clean up all FK references to organization before deleting it
+        OrganizationMember.objects.filter(organization=org).delete()
         Project.objects.filter(organization=org).delete()
+        ConvertedFormat.objects.filter(organization=org).delete()
+        Label.objects.filter(organization=org).delete()
+        Webhook.objects.filter(organization=org).delete()
+        ModelInterface.objects.filter(organization=org).delete()
+        ThirdPartyModelVersion.objects.filter(organization=org).delete()
+        ModelRun.objects.filter(organization=org).delete()
+        ModelProviderConnection.objects.filter(organization=org).delete()
+        SessionTimeoutPolicy.objects.filter(organization=org).delete()
+
         if hasattr(org, 'saml'):
             org.saml.delete()
+        if hasattr(org, 'jwt'):
+            org.jwt.delete()
+
+        # Null out active_organization for users pointing to this org
+        from users.models import User
+        User.objects.filter(active_organization=org).update(active_organization=None)
+
         org.delete()

@@ -8,9 +8,14 @@ from users.serializers import UserSerializer
 
 
 class OrganizationIdSerializer(DynamicFieldsMixin, serializers.ModelSerializer):
+    member_count = serializers.SerializerMethodField(read_only=True)
+
+    def get_member_count(self, org):
+        return org.members.filter(deleted_at__isnull=True).count()
+
     class Meta:
         model = Organization
-        fields = ['id', 'title', 'contact_info', 'created_at']
+        fields = ['id', 'title', 'contact_info', 'created_at', 'member_count']
 
 
 class OrganizationSerializer(DynamicFieldsMixin, serializers.ModelSerializer):

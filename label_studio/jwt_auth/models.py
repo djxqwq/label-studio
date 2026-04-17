@@ -53,7 +53,7 @@ class JWTSettings(models.Model):
             return True
 
         # enterprise
-        is_owner = user.is_owner if hasattr(user, 'is_owner') else (user.id == self.organization.created_by.id)
+        is_owner = user.is_owner if hasattr(user, 'is_owner') else (user.id == self.organization.created_by_id)
         is_administrator = hasattr(user, 'is_administrator') and user.is_administrator
         return is_owner or is_administrator
 

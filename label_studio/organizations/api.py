@@ -178,7 +178,10 @@ class OrganizationMemberListAPI(generics.ListAPIView):
         }
 
     def get_queryset(self):
-        org = generics.get_object_or_404(self.request.user.organizations, pk=self.kwargs[self.lookup_field])
+        if self.request.user.is_superuser:
+            org = generics.get_object_or_404(Organization, pk=self.kwargs[self.lookup_field])
+        else:
+            org = generics.get_object_or_404(self.request.user.organizations, pk=self.kwargs[self.lookup_field])
         if flag_set('fix_backend_dev_3134_exclude_deactivated_users', self.request.user):
             serializer = OrganizationMemberListParamsSerializer(data=self.request.GET)
             serializer.is_valid(raise_exception=True)
@@ -395,3 +398,119 @@ class OrganizationResetTokenAPI(APIView):
         serializer = OrganizationInviteSerializer(data={'invite_url': invite_url, 'token': org.token})
         serializer.is_valid()
         return Response(serializer.data, status=201)
+
+
+@method_decorator(
+    name='get',
+    decorator=extend_schema(
+        tags=['Organizations'],
+        summary='List all organizations (superuser only)',
+        description='Return a list of all organizations. Only superusers can access this endpoint.',
+        extensions={
+            'x-fern-sdk-group-name': 'organizations',
+            'x-fern-sdk-method-name': 'list_all',
+            'x-fern-audiences': ['internal'],
+        },
+    ),
+)
+class OrganizationAllAPI(generics.ListAPIView):
+    """API for superusers to list all organizations."""
+    queryset = Organization.objects.all()
+    parser_classes = (JSONParser, FormParser, MultiPartParser)
+    serializer_class = OrganizationIdSerializer
+
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied('Only superusers can list all organizations')
+        return super(OrganizationAllAPI, self).get(request, *args, **kwargs)
+
+
+@method_decorator(
+    name='patch',
+    decorator=extend_schema(
+        tags=['Users'],
+        summary='Update user active organization (superuser only)',
+        description='Update the active organization for a specific user. Only superusers can access this endpoint.',
+        extensions={
+            'x-fern-sdk-group-name': 'users',
+            'x-fern-sdk-method-name': 'update_active_organization',
+            'x-fern-audiences': ['internal'],
+        },
+    ),
+)
+class UserActiveOrganizationAPI(APIView):
+    """API for superusers to update user's active organization."""
+    parser_classes = (JSONParser,)
+
+    def patch(self, request, pk, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied('Only superusers can update user active organization')
+
+        user = get_object_or_404(User, pk=pk)
+        organization_id = request.data.get('active_organization')
+
+        if organization_id is None:
+            return Response({'detail': 'active_organization is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        organization = get_object_or_404(Organization, pk=organization_id)
+
+        # Check if user is a member of the organization
+        if not organization.has_permission(user):
+            # Add user to the organization if not already a member
+            organization.add_user(user)
+
+        user.active_organization = organization
+        user.save(update_fields=['active_organization'])
+
+        created_by_email = ''
+        try:
+            if organization.created_by_id:
+                created_by_email = organization.created_by.email or ''
+        except Exception:
+            pass
+
+        return Response({
+            'id': user.id,
+            'email': user.email,
+            'active_organization': organization.id,
+            'active_organization_meta': {
+                'title': organization.title,
+                'email': created_by_email
+            }
+        }, status=status.HTTP_200_OK)
+
+
+@method_decorator(
+    name='delete',
+    decorator=extend_schema(
+        tags=['Organizations'],
+        summary='Delete organization (superuser only)',
+        description='Delete an organization. Only superusers can delete organizations, and only if the organization has no members.',
+        extensions={
+            'x-fern-sdk-group-name': 'organizations',
+            'x-fern-sdk-method-name': 'delete',
+            'x-fern-audiences': ['internal'],
+        },
+    ),
+)
+class OrganizationDeleteAPI(APIView):
+    """API for superusers to delete organizations with no members."""
+    parser_classes = (JSONParser,)
+
+    def delete(self, request, pk, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied('Only superusers can delete organizations')
+
+        organization = get_object_or_404(Organization, pk=pk)
+
+        member_count = organization.members.filter(deleted_at__isnull=True).count()
+        if member_count > 0:
+            return Response(
+                {'detail': f'Cannot delete organization with {member_count} members. Remove all members first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        from organizations.functions import destroy_organization
+        destroy_organization(organization)
+
+        return Response({'detail': 'Organization deleted successfully'}, status=status.HTTP_200_OK)

@@ -156,12 +156,19 @@ class DataExport(object):
 
         input_json = DataExport.save_export_files(project, now, get_args, data, md5, name)
 
+        access_token = None
+        try:
+            if project.organization.created_by_id:
+                access_token = project.organization.created_by.auth_token.key
+        except Exception:
+            pass
+
         converter = Converter(
             config=project.get_parsed_config(),
             project_dir=None,
             upload_dir=os.path.join(settings.MEDIA_ROOT, settings.UPLOAD_DIR),
             download_resources=download_resources,
-            access_token=project.organization.created_by.auth_token.key,
+            access_token=access_token,
             hostname=hostname,
         )
         with get_temp_dir() as tmp_dir:

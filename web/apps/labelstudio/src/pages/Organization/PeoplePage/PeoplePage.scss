@@ -1,14 +1,18 @@
 .people {
+  padding: 2rem;
+
   &__controls {
     padding: 0 0 1rem;
   }
 
   &__content {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 3fr 2fr;
     grid-template-rows: min-content;
     align-items: flex-start;
     grid-gap: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
   }
 
   .heidy-tip {

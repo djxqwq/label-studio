@@ -6,9 +6,9 @@ from django.shortcuts import render
 
 @login_required
 def organization_people_list(request):
-    return render(request, 'organizations/people_list.html')
+    return render(request, 'organizations/react_page.html')
 
 
 @login_required
 def simple_view(request):
-    return render(request, 'organizations/people_list.html')
+    return render(request, 'organizations/react_page.html')

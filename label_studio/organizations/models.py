@@ -53,7 +53,7 @@ class OrganizationMember(OrganizationMemberMixin, models.Model):
 
     @cached_property
     def is_owner(self):
-        return self.user.id == self.organization.created_by.id
+        return self.organization.created_by_id and self.user.id == self.organization.created_by_id
 
     class Meta:
         ordering = ['pk']

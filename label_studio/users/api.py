@@ -6,14 +6,17 @@ from core.permissions import ViewClassPermission, all_permissions
 from django.utils.decorators import method_decorator
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
-from rest_framework import generics, viewsets
+from rest_framework import generics, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
-from rest_framework.exceptions import MethodNotAllowed
+from rest_framework.exceptions import MethodNotAllowed, PermissionDenied
+from rest_framework.generics import get_object_or_404
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from organizations.models import Organization
+from organizations.serializers import OrganizationIdSerializer
 from users.functions import check_avatar
 from users.models import User
 from users.serializers import HotkeysSerializer, UserSerializer, UserSerializerUpdate, WhoAmIUserSerializer
@@ -179,6 +182,8 @@ class UserAPI(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'head', 'patch', 'delete']
 
     def get_queryset(self):
+        if self.request.user.is_superuser:
+            return User.objects.all()
         return User.objects.filter(organizations=self.request.user.active_organization)
 
     @extend_schema(exclude=True)
@@ -418,3 +423,144 @@ class UserHotkeysAPI(APIView):
         except Exception as e:
             logger.error(f'Error updating hotkeys for user {request.user.pk}: {str(e)}')
             return Response({'error': 'Failed to update hotkeys configuration'}, status=500)
+
+
+@method_decorator(
+    name='get',
+    decorator=extend_schema(
+        tags=['Users'],
+        summary='List user organizations',
+        description='Return a list of all organizations that a specific user belongs to. Only superusers can access this endpoint.',
+        parameters=[
+            OpenApiParameter(name='pk', type=OpenApiTypes.INT, location='path', description='User ID'),
+        ],
+        responses={200: OrganizationIdSerializer(many=True)},
+        extensions={
+            'x-fern-sdk-group-name': 'users',
+            'x-fern-sdk-method-name': 'list_organizations',
+            'x-fern-audiences': ['internal'],
+        },
+    ),
+)
+class UserOrganizationsListAPI(generics.ListAPIView):
+    """API for superusers to list all organizations a user belongs to."""
+    serializer_class = OrganizationIdSerializer
+    parser_classes = (JSONParser, FormParser, MultiPartParser)
+
+    def get_queryset(self):
+        user_pk = self.kwargs.get('pk')
+        return Organization.objects.filter(
+            organizationmember__user_id=user_pk,
+            organizationmember__deleted_at__isnull=True
+        ).distinct()
+
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied('Only superusers can list user organizations')
+        return super(UserOrganizationsListAPI, self).get(request, *args, **kwargs)
+
+
+@method_decorator(
+    name='post',
+    decorator=extend_schema(
+        tags=['Users'],
+        summary='Add user to organization',
+        description='Add a specific user to an organization. Only superusers can access this endpoint.',
+        parameters=[
+            OpenApiParameter(name='pk', type=OpenApiTypes.INT, location='path', description='User ID'),
+        ],
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'organization_id': {'type': 'integer', 'description': 'Organization ID to add user to'},
+                },
+                'required': ['organization_id'],
+            },
+        },
+        responses={
+            201: OpenApiResponse(description='User added to organization successfully'),
+            400: OpenApiResponse(description='organization_id is required'),
+            404: OpenApiResponse(description='User or Organization not found'),
+            403: OpenApiResponse(description='Only superusers can add users to organizations'),
+        },
+        extensions={
+            'x-fern-sdk-group-name': 'users',
+            'x-fern-sdk-method-name': 'add_to_organization',
+            'x-fern-audiences': ['internal'],
+        },
+    ),
+)
+class UserOrganizationAddAPI(APIView):
+    """API for superusers to add a user to an organization."""
+    parser_classes = (JSONParser, FormParser, MultiPartParser)
+
+    def post(self, request, pk, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied('Only superusers can add users to organizations')
+
+        user = get_object_or_404(User, pk=pk)
+        organization_id = request.data.get('organization_id')
+
+        if organization_id is None:
+            return Response({'detail': 'organization_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        organization = get_object_or_404(Organization, pk=organization_id)
+
+        # Check if user is already a member
+        if organization.has_permission(user):
+            return Response({'detail': 'User is already a member of this organization'}, status=status.HTTP_200_OK)
+
+        # Add user to organization
+        organization.add_user(user)
+
+        return Response({
+            'detail': 'User added to organization successfully',
+            'user_id': user.id,
+            'organization_id': organization.id,
+            'organization_title': organization.title,
+        }, status=status.HTTP_201_CREATED)
+
+
+@method_decorator(
+    name='delete',
+    decorator=extend_schema(
+        tags=['Users'],
+        summary='Remove user from organization',
+        description='Remove a specific user from an organization. Only superusers can access this endpoint.',
+        parameters=[
+            OpenApiParameter(name='pk', type=OpenApiTypes.INT, location='path', description='User ID'),
+            OpenApiParameter(name='org_id', type=OpenApiTypes.INT, location='path', description='Organization ID'),
+        ],
+        responses={
+            204: OpenApiResponse(description='User removed from organization successfully'),
+            404: OpenApiResponse(description='User or Organization not found'),
+            403: OpenApiResponse(description='Only superusers can remove users from organizations'),
+            400: OpenApiResponse(description='User is not a member of this organization'),
+        },
+        extensions={
+            'x-fern-sdk-group-name': 'users',
+            'x-fern-sdk-method-name': 'remove_from_organization',
+            'x-fern-audiences': ['internal'],
+        },
+    ),
+)
+class UserOrganizationRemoveAPI(APIView):
+    """API for superusers to remove a user from an organization."""
+    parser_classes = (JSONParser, FormParser, MultiPartParser)
+
+    def delete(self, request, pk, org_id, *args, **kwargs):
+        if not request.user.is_superuser:
+            raise PermissionDenied('Only superusers can remove users from organizations')
+
+        user = get_object_or_404(User, pk=pk)
+        organization = get_object_or_404(Organization, pk=org_id)
+
+        # Check if user is a member of the organization
+        if not organization.has_permission(user):
+            return Response({'detail': 'User is not a member of this organization'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Remove user from organization
+        organization.remove_user(user)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

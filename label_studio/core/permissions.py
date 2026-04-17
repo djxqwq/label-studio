@@ -69,5 +69,15 @@ def make_perm(name, pred, overwrite=False):
     rules.add_perm(name, pred)
 
 
+# Superuser-only permission for organization creation
+def is_superuser(user, *args, **kwargs):
+    """Check if user is authenticated and is a superuser."""
+    return user.is_authenticated and user.is_superuser
+
+# Override organizations_create to require superuser
+make_perm(all_permissions.organizations_create, is_superuser, overwrite=True)
+
+# Default permissions for other operations (authenticated users)
 for _, permission_name in all_permissions:
-    make_perm(permission_name, rules.is_authenticated)
+    if permission_name != all_permissions.organizations_create:
+        make_perm(permission_name, rules.is_authenticated)

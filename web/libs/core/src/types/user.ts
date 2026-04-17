@@ -15,4 +15,5 @@ export type APIUser = {
   };
   allow_newsletters: boolean;
   date_joined: string;
+  is_superuser: boolean;
 };

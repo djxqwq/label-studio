@@ -25,6 +25,12 @@ _api_urlpattens = [
         api.OrganizationMemberDetailAPI.as_view(),
         name='organization-membership-detail',
     ),
+    # superuser only: list all organizations
+    path('all', api.OrganizationAllAPI.as_view(), name='organization-all'),
+    # superuser only: delete organization
+    path('<int:pk>/delete', api.OrganizationDeleteAPI.as_view(), name='organization-delete'),
+    # superuser only: update user active organization
+    path('user/<int:pk>/active-organization', api.UserActiveOrganizationAPI.as_view(), name='user-active-organization'),
 ]
 # TODO: these urlpatterns should be moved in core/urls with include('organizations.urls')
 urlpatterns = [
