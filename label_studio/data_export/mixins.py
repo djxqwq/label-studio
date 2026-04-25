@@ -28,6 +28,8 @@ from django.utils import dateformat, timezone
 from label_studio_sdk.converter import Converter
 from tasks.models import Annotation, AnnotationDraft, Task
 
+from .utils import normalize_export_file_for_converter, normalize_yolo_export_artifacts
+
 ONLY = 'only'
 EXCLUDE = 'exclude'
 
@@ -347,7 +349,10 @@ class ExportMixin:
             with open(input_file_path, 'wb') as file_:
                 file_.write(self.file.open().read())
 
+            normalize_export_file_for_converter(input_file_path)
+
             converter.convert(input_file_path, out_dir, to_format, is_dir=False)
+            normalize_yolo_export_artifacts(out_dir, to_format)
 
             files = get_all_files_from_dir(out_dir)
             dirs = get_all_dirs_from_dir(out_dir)

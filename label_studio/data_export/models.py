@@ -20,6 +20,8 @@ from django.utils.translation import gettext_lazy as _
 from label_studio_sdk.converter import Converter
 from tasks.models import Annotation
 
+from .utils import normalize_tasks_for_converter, normalize_yolo_export_artifacts
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,6 +152,7 @@ class DataExport(object):
 
         # prepare for saving
         now = datetime.now()
+        tasks = normalize_tasks_for_converter(tasks)
         data = json.dumps(tasks, ensure_ascii=False)
         md5 = hashlib.md5(json.dumps(data).encode('utf-8')).hexdigest()   # nosec
         name = 'project-' + str(project.id) + '-at-' + now.strftime('%Y-%m-%d-%H-%M') + f'-{md5[0:8]}'
@@ -173,6 +176,7 @@ class DataExport(object):
         )
         with get_temp_dir() as tmp_dir:
             converter.convert(input_json, tmp_dir, output_format, is_dir=False)
+            normalize_yolo_export_artifacts(tmp_dir, output_format)
             files = get_all_files_from_dir(tmp_dir)
             # if only one file is exported - no need to create archive
             if len(os.listdir(tmp_dir)) == 1:
