@@ -12,10 +12,20 @@ export const PeoplePage = () => {
   const [selectedUser, setSelectedUser] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const selectUser = useCallback((user) => {
-    setSelectedUser(user);
-    localStorage.setItem("selectedPeopleUser", user?.id);
-  }, []);
+  const selectUser = useCallback(
+    (selected) => {
+      setSelectedUser(selected);
+
+      if (!isSuperuser) return;
+
+      if (selected?.id) {
+        localStorage.setItem("selectedPeopleUser", selected.id);
+      } else {
+        localStorage.removeItem("selectedPeopleUser");
+      }
+    },
+    [isSuperuser],
+  );
 
   const handleUserUpdate = useCallback((updatedUser) => {
     setSelectedUser(updatedUser);
@@ -23,20 +33,12 @@ export const PeoplePage = () => {
   }, []);
 
   const defaultSelected = useMemo(() => {
-    return localStorage.getItem("selectedPeopleUser");
-  }, []);
+    if (isSuperuser) {
+      return localStorage.getItem("selectedPeopleUser");
+    }
 
-  if (!isSuperuser) {
-    return (
-      <Block name="people">
-        <Elem name="content">
-          <div className="flex items-center justify-center h-full">
-            <p className="text-neutral-content-subtle">Only superusers can access this page.</p>
-          </div>
-        </Elem>
-      </Block>
-    );
-  }
+    return user?.id ? String(user.id) : null;
+  }, [isSuperuser, user?.id]);
 
   return (
     <Block name="people">
@@ -49,7 +51,13 @@ export const PeoplePage = () => {
         />
 
         {selectedUser && (
-          <SelectedUserPanel user={selectedUser} onClose={() => selectUser(null)} onUserUpdate={handleUserUpdate} />
+          <SelectedUserPanel
+            user={selectedUser}
+            currentUser={user}
+            canManageOrganizations={isSuperuser}
+            onClose={() => selectUser(null)}
+            onUserUpdate={handleUserUpdate}
+          />
         )}
       </Elem>
     </Block>

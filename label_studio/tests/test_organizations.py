@@ -15,6 +15,75 @@ def test_active_organization_filled(business_client):
 
 
 @pytest.mark.django_db
+def test_user_list_only_returns_current_user_for_non_superuser(business_client):
+    other_user = User.objects.create(email='other_user@pytest.net')
+    OrganizationMember.objects.create(user=other_user, organization=business_client.organization)
+
+    response = business_client.get('/api/users/')
+    response_data = response.json()
+
+    assert response.status_code == 200
+    assert len(response_data) == 1
+    assert response_data[0]['id'] == business_client.user.id
+
+
+@pytest.mark.django_db
+def test_user_organizations_self_access_allowed_for_non_superuser(business_client):
+    response = business_client.get(f'/api/users/{business_client.user.id}/organizations/')
+    response_data = response.json()
+
+    assert response.status_code == 200
+    assert len(response_data) == 1
+    assert response_data[0]['id'] == business_client.organization.id
+
+
+@pytest.mark.django_db
+def test_user_organizations_other_user_forbidden_for_non_superuser(business_client):
+    other_user = User.objects.create(email='other_user@pytest.net')
+    OrganizationMember.objects.create(user=other_user, organization=business_client.organization)
+
+    response = business_client.get(f'/api/users/{other_user.id}/organizations/')
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_user_can_update_own_active_organization(business_client):
+    other_owner = User.objects.create(email='owner2@pytest.net')
+    other_organization = Organization.create_organization(created_by=other_owner, title='Second Team')
+    OrganizationMember.objects.create(user=business_client.user, organization=other_organization)
+
+    response = business_client.patch(
+        f'/api/organizations/user/{business_client.user.id}/active-organization',
+        data={'active_organization': other_organization.id},
+        content_type='application/json',
+    )
+
+    business_client.user.refresh_from_db()
+
+    assert response.status_code == 200
+    assert response.json()['active_organization'] == other_organization.id
+    assert business_client.user.active_organization_id == other_organization.id
+
+
+@pytest.mark.django_db
+def test_user_cannot_update_own_active_organization_to_unassigned_team(business_client):
+    other_owner = User.objects.create(email='owner3@pytest.net')
+    other_organization = Organization.create_organization(created_by=other_owner, title='Forbidden Team')
+
+    response = business_client.patch(
+        f'/api/organizations/user/{business_client.user.id}/active-organization',
+        data={'active_organization': other_organization.id},
+        content_type='application/json',
+    )
+
+    business_client.user.refresh_from_db()
+
+    assert response.status_code == 404
+    assert business_client.user.active_organization_id == business_client.organization.id
+
+
+@pytest.mark.django_db
 def test_api_list_organizations(business_client):
     response = business_client.get('/api/organizations/')
     response_data = response.json()

@@ -8,12 +8,14 @@ import { useState, useEffect } from "react";
 import { useToast } from "@humansignal/ui";
 import "./SelectedUser.scss";
 
-export const SelectedUserPanel = ({ user, onClose, onUserUpdate }) => {
+export const SelectedUserPanel = ({ user, currentUser, canManageOrganizations = false, onClose, onUserUpdate }) => {
   const api = useAPI();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [selectedOrgToAdd, setSelectedOrgToAdd] = useState(null);
   const [selectedActiveOrg, setSelectedActiveOrg] = useState(user.active_organization);
+  const canViewOrganizations = canManageOrganizations || currentUser?.id === user.id;
+  const canUpdateActiveOrganization = canManageOrganizations || currentUser?.id === user.id;
 
   useEffect(() => {
     setSelectedActiveOrg(user.active_organization);
@@ -26,6 +28,7 @@ export const SelectedUserPanel = ({ user, onClose, onUserUpdate }) => {
 
   const userOrgsQuery = useQuery({
     queryKey: ["userOrganizations", user.id],
+    enabled: canViewOrganizations,
     async queryFn() {
       const response = await api.callApi("userOrganizations", {
         params: { pk: user.id },
@@ -40,6 +43,7 @@ export const SelectedUserPanel = ({ user, onClose, onUserUpdate }) => {
 
   const allOrgsQuery = useQuery({
     queryKey: ["allOrganizations"],
+    enabled: canManageOrganizations,
     async queryFn() {
       const response = await api.callApi("allOrganizations");
       return response || [];
@@ -165,29 +169,33 @@ export const SelectedUserPanel = ({ user, onClose, onUserUpdate }) => {
 
       <Elem name="section">
         <Elem name="section-title">Active Team</Elem>
-        <Elem name="active-org-selector">
-          <Select
-            value={selectedActiveOrg}
-            options={
-              userOrgsQuery.data?.map((org) => ({
-                label: org.title,
-                value: org.id,
-              })) || []
-            }
-            onChange={(val) => handleSetActiveOrg(Number(val))}
-            placeholder="Select active team"
-            disabled={updateActiveOrgMutation.isPending || !userOrgsQuery.data?.length}
-          />
-          {updateActiveOrgMutation.isPending && <Elem name="loading-text">Updating...</Elem>}
-        </Elem>
+        {canUpdateActiveOrganization ? (
+          <Elem name="active-org-selector">
+            <Select
+              value={selectedActiveOrg}
+              options={
+                userOrgsQuery.data?.map((org) => ({
+                  label: org.title,
+                  value: org.id,
+                })) || []
+              }
+              onChange={(val) => handleSetActiveOrg(Number(val))}
+              placeholder="Select active team"
+              disabled={updateActiveOrgMutation.isPending || !userOrgsQuery.data?.length}
+            />
+            {updateActiveOrgMutation.isPending && <Elem name="loading-text">Updating...</Elem>}
+          </Elem>
+        ) : (
+          <Elem name="loading-text">{user.active_organization_meta?.title || "N/A"}</Elem>
+        )}
       </Elem>
 
       <Elem name="section">
         <Elem name="section-title">All Teams</Elem>
 
-        {userOrgsQuery.isLoading && <Elem name="loading-text">Loading...</Elem>}
+        {canViewOrganizations && userOrgsQuery.isLoading && <Elem name="loading-text">Loading...</Elem>}
 
-        {userOrgsQuery.data && userOrgsQuery.data.length > 0 && (
+        {canViewOrganizations && userOrgsQuery.data && userOrgsQuery.data.length > 0 && (
           <Elem name="orgs-list">
             {userOrgsQuery.data.map((org) => {
               const isActive = org.id === selectedActiveOrg;
@@ -202,44 +210,48 @@ export const SelectedUserPanel = ({ user, onClose, onUserUpdate }) => {
                       </Elem>
                     )}
                   </Elem>
-                  <Button
-                    look="outlined"
-                    size="small"
-                    onClick={() => handleRemoveFromOrg(org.id)}
-                    disabled={removeOrgMutation.isPending}
-                  >
-                    Remove
-                  </Button>
+                  {canManageOrganizations && (
+                    <Button
+                      look="outlined"
+                      size="small"
+                      onClick={() => handleRemoveFromOrg(org.id)}
+                      disabled={removeOrgMutation.isPending}
+                    >
+                      Remove
+                    </Button>
+                  )}
                 </Elem>
               );
             })}
           </Elem>
         )}
 
-        {userOrgsQuery.data && userOrgsQuery.data.length === 0 && (
+        {canViewOrganizations && userOrgsQuery.data && userOrgsQuery.data.length === 0 && (
           <Elem name="empty-text">No organizations assigned</Elem>
         )}
 
-        <Elem name="add-org" className="mt-4">
-          <Elem name="add-org-label">Add to organization:</Elem>
-          <Elem name="add-org-controls">
-            <Select
-              value={selectedOrgToAdd}
-              options={
-                availableOrgsToAdd?.map((org) => ({
-                  label: org.title,
-                  value: org.id,
-                })) || []
-              }
-              onChange={(val) => setSelectedOrgToAdd(Number(val))}
-              placeholder="Select organization"
-              disabled={addOrgMutation.isPending}
-            />
-            <Button onClick={handleAddToOrg} disabled={!selectedOrgToAdd || addOrgMutation.isPending}>
-              {addOrgMutation.isPending ? "Adding..." : "Add"}
-            </Button>
+        {canManageOrganizations && (
+          <Elem name="add-org" className="mt-4">
+            <Elem name="add-org-label">Add to organization:</Elem>
+            <Elem name="add-org-controls">
+              <Select
+                value={selectedOrgToAdd}
+                options={
+                  availableOrgsToAdd?.map((org) => ({
+                    label: org.title,
+                    value: org.id,
+                  })) || []
+                }
+                onChange={(val) => setSelectedOrgToAdd(Number(val))}
+                placeholder="Select organization"
+                disabled={addOrgMutation.isPending}
+              />
+              <Button onClick={handleAddToOrg} disabled={!selectedOrgToAdd || addOrgMutation.isPending}>
+                {addOrgMutation.isPending ? "Adding..." : "Add"}
+              </Button>
+            </Elem>
           </Elem>
-        </Elem>
+        )}
       </Elem>
 
       <Elem tag="p" name="last-active">

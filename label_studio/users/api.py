@@ -184,7 +184,7 @@ class UserAPI(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.request.user.is_superuser:
             return User.objects.all()
-        return User.objects.filter(organizations=self.request.user.active_organization)
+        return User.objects.filter(pk=self.request.user.pk)
 
     @extend_schema(exclude=True)
     @action(detail=True, methods=['delete', 'post'], permission_required=all_permissions.avatar_any)
@@ -430,7 +430,10 @@ class UserHotkeysAPI(APIView):
     decorator=extend_schema(
         tags=['Users'],
         summary='List user organizations',
-        description='Return a list of all organizations that a specific user belongs to. Only superusers can access this endpoint.',
+        description=(
+            'Return a list of all organizations that a specific user belongs to. '
+            'Superusers can access any user, while non-superusers can only access their own organizations.'
+        ),
         parameters=[
             OpenApiParameter(name='pk', type=OpenApiTypes.INT, location='path', description='User ID'),
         ],
@@ -443,7 +446,7 @@ class UserHotkeysAPI(APIView):
     ),
 )
 class UserOrganizationsListAPI(generics.ListAPIView):
-    """API for superusers to list all organizations a user belongs to."""
+    """API for listing user organizations with self-service access for non-superusers."""
     serializer_class = OrganizationIdSerializer
     parser_classes = (JSONParser, FormParser, MultiPartParser)
 
@@ -455,8 +458,10 @@ class UserOrganizationsListAPI(generics.ListAPIView):
         ).distinct()
 
     def get(self, request, *args, **kwargs):
-        if not request.user.is_superuser:
-            raise PermissionDenied('Only superusers can list user organizations')
+        user_pk = self.kwargs.get('pk')
+
+        if not request.user.is_superuser and request.user.pk != user_pk:
+            raise PermissionDenied('Only superusers can list organizations for other users')
         return super(UserOrganizationsListAPI, self).get(request, *args, **kwargs)
 
 

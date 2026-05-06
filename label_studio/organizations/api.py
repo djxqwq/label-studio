@@ -429,8 +429,11 @@ class OrganizationAllAPI(generics.ListAPIView):
     name='patch',
     decorator=extend_schema(
         tags=['Users'],
-        summary='Update user active organization (superuser only)',
-        description='Update the active organization for a specific user. Only superusers can access this endpoint.',
+        summary='Update user active organization',
+        description=(
+            'Update the active organization for a specific user. '
+            'Superusers can update any user, while non-superusers can only update their own active organization.'
+        ),
         extensions={
             'x-fern-sdk-group-name': 'users',
             'x-fern-sdk-method-name': 'update_active_organization',
@@ -439,25 +442,31 @@ class OrganizationAllAPI(generics.ListAPIView):
     ),
 )
 class UserActiveOrganizationAPI(APIView):
-    """API for superusers to update user's active organization."""
+    """API for updating a user's active organization with self-service access."""
     parser_classes = (JSONParser,)
 
     def patch(self, request, pk, *args, **kwargs):
-        if not request.user.is_superuser:
-            raise PermissionDenied('Only superusers can update user active organization')
-
         user = get_object_or_404(User, pk=pk)
+
+        if not request.user.is_superuser and request.user.pk != user.pk:
+            raise PermissionDenied('Only superusers can update active organization for other users')
+
         organization_id = request.data.get('active_organization')
 
         if organization_id is None:
             return Response({'detail': 'active_organization is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        organization = get_object_or_404(Organization, pk=organization_id)
+        if request.user.is_superuser:
+            organization = get_object_or_404(Organization, pk=organization_id)
 
-        # Check if user is a member of the organization
-        if not organization.has_permission(user):
-            # Add user to the organization if not already a member
-            organization.add_user(user)
+            # Preserve existing superuser behavior: switching can also attach the user to that organization.
+            if not organization.has_permission(user):
+                organization.add_user(user)
+        else:
+            organization = get_object_or_404(
+                user.organizations.filter(organizationmember__deleted_at__isnull=True).distinct(),
+                pk=organization_id,
+            )
 
         user.active_organization = organization
         user.save(update_fields=['active_organization'])

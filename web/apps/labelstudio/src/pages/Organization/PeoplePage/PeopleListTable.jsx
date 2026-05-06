@@ -94,46 +94,52 @@ export const PeopleListTable = ({ onSelect, selectedUser, defaultSelected, refre
 
       <Elem name="wrapper">
         {usersList ? (
-          <Elem name="users">
-            <Elem name="header">
-              <Elem name="column" mix="avatar" />
-              <Elem name="column" mix="email">
-                Email
+          usersList.length > 0 ? (
+            <Elem name="users">
+              <Elem name="header">
+                <Elem name="column" mix="avatar" />
+                <Elem name="column" mix="email">
+                  Email
+                </Elem>
+                <Elem name="column" mix="name">
+                  Name
+                </Elem>
+                <Elem name="column" mix="last-activity">
+                  Last Activity
+                </Elem>
               </Elem>
-              <Elem name="column" mix="name">
-                Name
-              </Elem>
-              <Elem name="column" mix="last-activity">
-                Last Activity
-              </Elem>
-            </Elem>
-            <Elem name="body">
-              {usersList.map((user) => {
-                const active = user.id === selectedUser?.id;
+              <Elem name="body">
+                {usersList.map((user) => {
+                  const active = user.id === selectedUser?.id;
 
-                return (
-                  <Elem key={`user-${user.id}`} name="user" mod={{ active }} onClick={() => handleSelectUser(user)}>
-                    <Elem name="field" mix="avatar">
-                      <CopyableTooltip title={`User ID: ${user.id}`} textForCopy={user.id}>
-                        <Userpic user={user} style={{ width: 28, height: 28 }} />
-                      </CopyableTooltip>
+                  return (
+                    <Elem key={`user-${user.id}`} name="user" mod={{ active }} onClick={() => handleSelectUser(user)}>
+                      <Elem name="field" mix="avatar">
+                        <CopyableTooltip title={`User ID: ${user.id}`} textForCopy={user.id}>
+                          <Userpic user={user} style={{ width: 28, height: 28 }} />
+                        </CopyableTooltip>
+                      </Elem>
+                      <Elem name="field" mix="email">
+                        {user.email}
+                      </Elem>
+                      <Elem name="field" mix="name">
+                        {user.first_name} {user.last_name}
+                      </Elem>
+                      <Elem name="field" mix="last-activity">
+                        {user.last_activity
+                          ? formatDistance(new Date(user.last_activity), new Date(), { addSuffix: true })
+                          : "N/A"}
+                      </Elem>
                     </Elem>
-                    <Elem name="field" mix="email">
-                      {user.email}
-                    </Elem>
-                    <Elem name="field" mix="name">
-                      {user.first_name} {user.last_name}
-                    </Elem>
-                    <Elem name="field" mix="last-activity">
-                      {user.last_activity
-                        ? formatDistance(new Date(user.last_activity), new Date(), { addSuffix: true })
-                        : "N/A"}
-                    </Elem>
-                  </Elem>
-                );
-              })}
+                  );
+                })}
+              </Elem>
             </Elem>
-          </Elem>
+          ) : (
+            <Elem name="loading">
+              <p className="text-neutral-content-subtle">No users found</p>
+            </Elem>
+          )
         ) : (
           <Elem name="loading">
             <Spinner size={36} />
