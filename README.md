@@ -188,6 +188,31 @@ docker build -t label-studio:latest .
 docker run -it -p 8080:8080 -v $(pwd)/mydata:/label-studio/data label-studio:latest
 ```
 
+## 生产打包 / 发布
+
+推荐把 **Docker 镜像** 作为生产环境交付物。这个仓库根目录下的 `Dockerfile` 已经包含前端生产构建、Python 依赖安装、`collectstatic` 和最终运行镜像封装，因此生产打包命令直接使用：
+
+```bash
+docker build -t <registry>/label-studio:<tag> .
+```
+
+例如：
+
+```bash
+docker build -t registry.example.com/label-studio:2026.05.06 .
+docker push registry.example.com/label-studio:2026.05.06
+```
+
+如果只是想单独验证构建产物，也可以使用下面两个子命令：
+
+```bash
+# 仅构建前端生产包
+make frontend-build
+
+# 仅构建 Python 分发包（wheel / sdist）
+poetry build
+```
+
 ---
 
 ## 创建 Superuser

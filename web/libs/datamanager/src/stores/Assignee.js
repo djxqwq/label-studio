@@ -3,6 +3,8 @@ import { User } from "./Users";
 import { StringOrNumberID } from "./types";
 import { FF_DISABLE_GLOBAL_USER_FETCHING, isFF } from "../utils/feature-flags";
 
+const UserReference = types.safeReference(User);
+
 // Create a union type that can handle both user references and direct user objects
 const UserOrReference = types.union({
   dispatcher: (snapshot) => {
@@ -11,11 +13,11 @@ const UserOrReference = types.union({
       return User;
     }
     // Otherwise, it's a reference to a user ID
-    return types.reference(User);
+    return UserReference;
   },
   cases: {
     [User.name]: User,
-    reference: types.reference(User),
+    reference: UserReference,
   },
 });
 
@@ -29,28 +31,28 @@ export const Assignee = types
   })
   .views((self) => ({
     get firstName() {
-      return self.user.firstName;
+      return self.user?.firstName ?? "";
     },
     get lastName() {
-      return self.user.lastName;
+      return self.user?.lastName ?? "";
     },
     get username() {
-      return self.user.username;
+      return self.user?.username ?? "";
     },
     get email() {
-      return self.user.email;
+      return self.user?.email ?? "";
     },
     get lastActivity() {
-      return self.user.lastActivity;
+      return self.user?.lastActivity ?? "";
     },
     get avatar() {
-      return self.user.avatar;
+      return self.user?.avatar ?? null;
     },
     get initials() {
-      return self.user.initials;
+      return self.user?.initials ?? "";
     },
     get fullName() {
-      return self.user.fullName;
+      return self.user?.fullName ?? "";
     },
   }))
   .preProcessSnapshot((sn) => {
