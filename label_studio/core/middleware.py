@@ -121,15 +121,20 @@ class ContextLogMiddleware(CommonMiddleware):
 
     def __call__(self, request):
         body = None
-        try:
-            body = json.loads(request.body)
-        except:  # noqa: E722
+        # Skip reading body for multipart uploads — consuming the stream prevents
+        # DRF's MultiPartParser from parsing request.FILES later.
+        if 'multipart/form-data' in request.content_type:
+            pass
+        else:
             try:
-                body = request.body.decode('utf-8')
+                body = json.loads(request.body)
             except:  # noqa: E722
-                pass
+                try:
+                    body = request.body.decode('utf-8')
+                except:  # noqa: E722
+                    pass
 
-        if 'server_id' not in request:
+        if not hasattr(request, 'server_id'):
             setattr(request, 'server_id', self.log._get_server_id())
 
         response = self.get_response(request)
@@ -138,7 +143,7 @@ class ContextLogMiddleware(CommonMiddleware):
         return response
 
     def process_request(self, request):
-        if 'server_id' not in request:
+        if not hasattr(request, 'server_id'):
             setattr(request, 'server_id', self.log._get_server_id())
 
 
