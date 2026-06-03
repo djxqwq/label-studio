@@ -419,7 +419,7 @@ Form.Builder = forwardRef(
     const renderFields = (fields) => {
       return fields.map((field, index) => {
         if (!field) return <div key={`spacer-${index}`} />;
-        const { trigger_form_update, ...restProps } = field;
+        const { trigger_form_update, value: initialValue, ...restProps } = field;
 
         const currentValue = formData?.[field.name] ?? undefined;
         const triggerUpdate = props.autosubmit !== true && trigger_form_update === true;
@@ -434,7 +434,7 @@ Form.Builder = forwardRef(
             return null;
           }
 
-          return currentValue ?? field.value;
+          return currentValue ?? initialValue;
         };
 
         const commonProps = {};
@@ -466,6 +466,11 @@ Form.Builder = forwardRef(
         if (["checkbox", "radio", "toggle"].includes(field.type)) {
           commonProps.checked = getValue();
         } else {
+          // For native inputs (`type` is number/text/etc.) the schema-provided
+          // `value` is used as the *initial* value only. We must strip it from
+          // the spread so that React doesn't combine `value` + `defaultValue`
+          // and lock the field as a controlled component, which prevents the
+          // user from editing the value.
           commonProps.defaultValue = getValue();
         }
 

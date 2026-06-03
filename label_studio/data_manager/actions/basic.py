@@ -18,15 +18,127 @@ from webhooks.utils import emit_webhooks_for_instance
 all_permissions = AllPermissions()
 logger = logging.getLogger(__name__)
 
+# Default number of tasks sent to the ML backend in a single chunk when
+# retrieving predictions. Smaller chunks keep individual HTTP responses
+# short enough to avoid frontend / proxy timeouts on large selections.
+DEFAULT_PREDICT_BATCH_SIZE = 100
+# Hard upper bound for a single chunk to prevent accidental DoS-style
+# requests that re-introduce the timeout the batching was meant to fix.
+MAX_PREDICT_BATCH_SIZE = 1000
+
 
 def retrieve_tasks_predictions(project, queryset, **kwargs):
-    """Retrieve predictions by tasks ids
+    """Retrieve predictions by tasks ids, processed in configurable batches.
+
+    Selected tasks are split into smaller chunks (default 100) and processed
+    sequentially. This keeps the response time per request bounded and avoids
+    the front-end timing out on large selections, while still keeping the
+    overall behaviour synchronous from the user's perspective.
+
+    The chunk size is controlled by the optional ``batch_size`` field in the
+    action dialog form (see :func:`retrieve_tasks_predictions_form`).
 
     :param project: project instance
     :param queryset: filtered tasks db queryset
+    :param kwargs: must contain the current ``request`` (provides ``batch_size``)
     """
-    evaluate_predictions(queryset)
-    return {'processed_items': queryset.count(), 'detail': 'Retrieved ' + str(queryset.count()) + ' predictions'}
+    request = kwargs.get('request')
+    batch_size = _resolve_batch_size(request, fallback=DEFAULT_PREDICT_BATCH_SIZE)
+
+    # Stable ordering so batching is deterministic across runs and so the
+    # user can re-run the action to pick up where it left off.
+    ordered_qs = queryset.order_by('id')
+    total = ordered_qs.count()
+    if total == 0:
+        return {
+            'processed_items': 0,
+            'remaining_items': 0,
+            'batch_size': batch_size,
+            'total_batches': 0,
+            'detail': 'No tasks to retrieve predictions for',
+        }
+
+    task_ids = list(ordered_qs.values_list('id', flat=True))
+    chunks = [task_ids[i:i + batch_size] for i in range(0, len(task_ids), batch_size)]
+
+    processed = 0
+    failed_chunks = []
+    for index, chunk in enumerate(chunks, start=1):
+        chunk_qs = Task.objects.filter(id__in=chunk)
+        try:
+            evaluate_predictions(chunk_qs)
+            processed += len(chunk)
+            logger.info(
+                'retrieve_tasks_predictions: project=%s chunk=%s/%s size=%s processed=%s/%s',
+                project.id, index, len(chunks), len(chunk), processed, total,
+            )
+        except Exception as e:
+            logger.error(
+                'retrieve_tasks_predictions: project=%s chunk=%s/%s failed: %s',
+                project.id, index, len(chunks), e,
+            )
+            failed_chunks.append({'chunk': index, 'task_ids': list(chunk), 'error': str(e)})
+
+    remaining = total - processed
+    detail = (
+        f'Retrieved predictions for {processed} of {total} tasks '
+        f'in {len(chunks)} batch{"es" if len(chunks) != 1 else ""} of up to {batch_size}'
+    )
+    if remaining:
+        detail += f' ({remaining} failed - check server logs)'
+
+    response = {
+        'processed_items': processed,
+        'remaining_items': remaining,
+        'batch_size': batch_size,
+        'total_batches': len(chunks),
+        'detail': detail,
+    }
+    if failed_chunks:
+        response['failed_batches'] = failed_chunks
+    return response
+
+
+def _resolve_batch_size(request, fallback):
+    """Read and validate the ``batch_size`` value from the request body."""
+    if request is None:
+        return fallback
+    raw = request.data.get('batch_size', fallback)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if value <= 0:
+        return fallback
+    return min(value, MAX_PREDICT_BATCH_SIZE)
+
+
+def retrieve_tasks_predictions_form(user, project):
+    """Dialog form schema for :func:`retrieve_tasks_predictions`."""
+    return [
+        {
+            'columnCount': 1,
+            'fields': [
+                {
+                    'type': 'number',
+                    'name': 'batch_size',
+                    'label': 'Batch size',
+                    'value': DEFAULT_PREDICT_BATCH_SIZE,
+                    'min': 1,
+                    'max': MAX_PREDICT_BATCH_SIZE,
+                    'step': 1,
+                    'placeholder': str(DEFAULT_PREDICT_BATCH_SIZE),
+                    'required': False,
+                    'help': (
+                        'Number of tasks sent to the ML backend per chunk. '
+                        'Smaller values avoid HTTP timeouts on large selections; '
+                        'larger values finish in fewer API calls. '
+                        f'Maximum allowed: {MAX_PREDICT_BATCH_SIZE}.'
+                    ),
+                },
+            ],
+        },
+    ]
 
 
 def delete_tasks(project, queryset, **kwargs):
@@ -171,11 +283,12 @@ actions = [
         'order': 90,
         'dialog': {
             'title': 'Retrieve Predictions',
-            'text': 'Send the selected tasks to all ML backends connected to the project.'
-            'This operation might be abruptly interrupted due to a timeout. '
-            'The recommended way to get predictions is to update tasks using the Label Studio API.'
+            'text': 'Send the selected tasks to all ML backends connected to the project. '
+            'Tasks are processed in small batches (configurable below) to avoid HTTP timeouts on large selections. '
+            'The recommended way to get predictions is to update tasks using the Label Studio API. '
             'Please confirm your action.',
             'type': 'confirm',
+            'form': retrieve_tasks_predictions_form,
         },
     },
     {
