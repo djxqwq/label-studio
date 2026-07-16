@@ -10,7 +10,9 @@ _project_urlpatterns = [
 ]
 
 _train_urlpatterns = [
-    path('api/train/configs', api.TrainConfigListAPI.as_view(), name='train-configs'),
+    path('api/train/configs', api.ModelConfigListAPI.as_view(), name='train-configs'),
+    re_path(r'^api/train/configs/(?P<config_id>\d+)/?$',
+            api.ModelConfigDetailAPI.as_view(), name='train-config-detail'),
 ]
 
 urlpatterns = _project_urlpatterns + _train_urlpatterns

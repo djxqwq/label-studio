@@ -75,6 +75,8 @@ export const API_CONFIG = {
 
     // Training
     trainConfigs: "GET:/train/configs",
+    createTrainConfig: "POST:/train/configs",
+    deleteTrainConfig: "DELETE:/train/configs/:pk",
     startTrain: "POST:/projects/:pk/train",
 
     // Export

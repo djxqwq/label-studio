@@ -11,6 +11,38 @@
     font-size: 14px;
   }
 
+  &__search-box {
+    margin-bottom: 8px;
+
+    input {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #d0d0d0;
+      border-radius: 6px;
+      font-size: 13px;
+      box-sizing: border-box;
+      outline: none;
+
+      &:focus {
+        border-color: #888;
+      }
+
+      &:disabled {
+        background: #f5f5f5;
+      }
+    }
+  }
+
+  &__select-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+
+    .select {
+      flex: 1;
+    }
+  }
+
   &__params-row {
     display: flex;
     gap: 12px;
@@ -26,23 +58,42 @@
     margin-bottom: 4px;
   }
 
-  &__param-input input {
-    width: 100%;
-    padding: 6px 10px;
-    border: 1px solid #d0d0d0;
-    border-radius: 6px;
-    font-size: 14px;
-    box-sizing: border-box;
-    outline: none;
+  &__param-input {
+    input {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #d0d0d0;
+      border-radius: 6px;
+      font-size: 14px;
+      box-sizing: border-box;
+      outline: none;
 
-    &:focus {
-      border-color: #888;
-    }
+      &:focus {
+        border-color: #888;
+      }
 
-    &:disabled {
-      background: #f5f5f5;
-      color: #999;
+      &:disabled {
+        background: #f5f5f5;
+        color: #999;
+      }
     }
+  }
+
+  &__create-form {
+    margin-top: 16px;
+    padding: 16px;
+    background: #f8f8f8;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+  }
+
+  &__form-row {
+    display: flex;
+    gap: 12px;
+  }
+
+  &__form-item {
+    flex: 1;
   }
 
   &__status {

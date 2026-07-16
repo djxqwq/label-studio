@@ -19,11 +19,48 @@ logger = logging.getLogger(__name__)
 
 # ==================== 模型配置 CRUD（前端管理，不碰代码）====================
 
+# 预置默认配置
+_DEFAULT_CONFIGS = [
+    # (name, task_type, model_yaml, model_pt, classes)
+    ("tree-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["tree"]),
+    ("jasmine-blooming-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["blooming"]),
+    ("jasmine-seed-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["seed"]),
+    ("jasmine-wither-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["wither"]),
+    ("jasmine-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["jasmine"]),
+    ("orange-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["orange"]),
+    ("orange-detect", "detect", "yolov8x", "yolov8x", ["orange"]),
+    ("tray-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["tray"]),
+    ("tray-detect", "detect", "yolov8x", "yolov8x", ["tray"]),
+    ("tray-obb-single", "obb", "yolov8x-obb", "yolov8x-obb", ["tray"]),
+    ("scab-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["scab"]),
+    ("scab-detect", "detect", "yolov8x", "yolov8x", ["scab"]),
+    ("zebrafish-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["zebrafish"]),
+    ("uniform-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["uniform"]),
+    ("flavor-injection-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["flavor"]),
+    ("diantou-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["diantou"]),
+]
+
+
+def _seed_defaults(request):
+    """每次访问时自动同步预置模型配置到 DB"""
+    if not request.user.is_authenticated:
+        return
+    for name, task_type, yaml, pt, classes in _DEFAULT_CONFIGS:
+        ModelConfig.objects.update_or_create(
+            name=name,
+            defaults=dict(
+                task_type=task_type, model_yaml=yaml, model_pt=pt,
+                classes=classes, created_by=request.user,
+            ),
+        )
+
+
 class ModelConfigListAPI(APIView):
     """GET /api/train/configs —— 列表   POST —— 新建"""
     permission_required = all_permissions.projects_view
 
     def get(self, request):
+        _seed_defaults(request)
         configs = ModelConfig.objects.all()
         return Response([c.to_dict() for c in configs])
 
