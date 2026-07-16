@@ -1,0 +1,78 @@
+.training-page {
+  &__section {
+    margin-bottom: 16px;
+  }
+
+  &__label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: #333;
+    font-size: 14px;
+  }
+
+  &__params-row {
+    display: flex;
+    gap: 12px;
+  }
+
+  &__param {
+    flex: 1;
+  }
+
+  &__param-label {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 4px;
+  }
+
+  &__param-input input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    font-size: 14px;
+    box-sizing: border-box;
+    outline: none;
+
+    &:focus {
+      border-color: #888;
+    }
+
+    &:disabled {
+      background: #f5f5f5;
+      color: #999;
+    }
+  }
+
+  &__status {
+    margin: 12px 0;
+    padding: 12px;
+    background: #e8f5e9;
+    border-radius: 6px;
+    color: #2e7d32;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__status-icon {
+    font-size: 20px;
+  }
+
+  &__error {
+    margin: 12px 0;
+    padding: 12px;
+    background: #fbe9e7;
+    border-radius: 6px;
+    color: #c62828;
+    font-size: 14px;
+  }
+
+  &__footer {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+  }
+}

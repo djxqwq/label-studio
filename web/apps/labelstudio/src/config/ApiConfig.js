@@ -73,6 +73,10 @@ export const API_CONFIG = {
     modelVersions: "/ml/:pk/versions",
     mlInteractive: "POST:/ml/:pk/interactive-annotating",
 
+    // Training
+    trainConfigs: "GET:/train/configs",
+    startTrain: "POST:/projects/:pk/train",
+
     // Export
     export: "/projects/:pk/export",
     previousExports: "/projects/:pk/export/files",

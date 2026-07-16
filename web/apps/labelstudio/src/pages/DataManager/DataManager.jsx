@@ -13,6 +13,7 @@ import { Block, Elem } from "../../utils/bem";
 import { isDefined } from "../../utils/helpers";
 import { ImportModal } from "../CreateProject/Import/ImportModal";
 import { ExportPage } from "../ExportPage/ExportPage";
+import { TrainingPage } from "../TrainingPage/TrainingPage";
 import { APIConfig } from "./api-config";
 
 import "./DataManager.scss";
@@ -233,6 +234,7 @@ DataManagerPage.path = "/data";
 DataManagerPage.pages = {
   ExportPage,
   ImportModal,
+  TrainingPage,
 };
 DataManagerPage.context = ({ dmRef }) => {
   const { project } = useProject();
@@ -240,6 +242,7 @@ DataManagerPage.context = ({ dmRef }) => {
 
   const links = {
     "/settings": "Settings",
+    "/data/train": "训练",
   };
 
   const updateCrumbs = (currentMode) => {

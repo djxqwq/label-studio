@@ -43,6 +43,7 @@ services:
     #      - LOG_LEVEL=DEBUG
     volumes:
       - ./mydata:/label-studio/data:rw
+      - ./cv-ultralytics:/label-studio/cv-ultralytics:rw
     command: label-studio-uwsgi
 
   db:
