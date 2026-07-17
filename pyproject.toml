@@ -77,7 +77,7 @@ dependencies = [
     # YOLO 训练依赖（torch/torchvision/ultralytics 用 pip 单独装，
     # CentOS 7 glibc 2.17 不兼容 poetry 锁定的 nvidia-* wheel）
     ## HumanSignal repo dependencies :start
-    "label-studio-sdk @ https://github.com/HumanSignal/label-studio-sdk/archive/60b2079d6a4cc0e77b478dfe94bc5790776ada17.zip",
+    "label-studio-sdk (>=2.0.0,<3.0.0)",
     ## HumanSignal repo dependencies :end
 ]
 
