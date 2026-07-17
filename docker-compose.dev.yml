@@ -1,0 +1,15 @@
+# 开发模式：挂载代码目录，改代码即时生效，无需重构建
+# 使用方式：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+services:
+  app:
+    environment:
+      - LABEL_STUDIO_DEBUG=true
+    volumes:
+      # 保持原有挂载
+      - ./mydata:/label-studio/data:rw
+      - ./cv-ultralytics:/label-studio/cv-ultralytics:rw
+      # 开发模式：挂载后端代码（改 Python 无需重构建）
+      - ./label_studio:/label-studio/label_studio:rw
+    # 使用 Django runserver（支持热重载），替代 uwsgi
+    command: >
+      python3 /label-studio/label_studio/manage.py runserver 0.0.0.0:8000
