@@ -3,9 +3,6 @@ import os
 import sys
 import random
 import shutil
-import subprocess
-import threading
-
 
 # cv-ultralytics 路径：label-studio/cv-ultralytics/
 _BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -14,6 +11,19 @@ if _CV_ULTRA not in sys.path:
     sys.path.insert(0, _CV_ULTRA)
 
 _PROJ_ROOT = os.path.join(_CV_ULTRA, 'ultralytics', 'ultralytics')
+
+
+def _log(job, message, level='INFO'):
+    """写入训练日志到 DB"""
+    from .models import TrainingLog
+    TrainingLog.objects.create(job=job, level=level, message=message)
+
+
+def _progress(job, current_epoch, total_epochs):
+    job.current_epoch = current_epoch
+    job.total_epochs = total_epochs
+    job.progress = int(current_epoch / total_epochs * 100) if total_epochs else 0
+    job.save()
 
 
 def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: list):
@@ -28,7 +38,6 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     src_img = os.path.join(export_dir, 'images')
     src_lbl = os.path.join(export_dir, 'labels')
 
-    # 先找到导出目录的实际 images/ labels/ 位置
     if not os.path.isdir(src_img):
         for item in os.listdir(export_dir):
             p = os.path.join(export_dir, item)
@@ -40,7 +49,6 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     if not os.path.isdir(src_img) or not os.path.isdir(src_lbl):
         raise FileNotFoundError(f'导出数据不完整: images={os.path.isdir(src_img)}, labels={os.path.isdir(src_lbl)}')
 
-    # 配对 images 和 labels
     pairs = []
     for img_file in os.listdir(src_img):
         for ext in ['.jpg', '.jpeg', '.png']:
@@ -92,30 +100,71 @@ names:
     return True
 
 
-def run_training(model_yaml: str, model_pt: str, data_yaml: str, **params):
-    """直接调 YOLO model.train()"""
+def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
+    """直接调 YOLO model.train()，写进度和日志到 DB"""
     from ultralytics import YOLO
+    from ultralytics.engine.trainer import BaseTrainer
     from datetime import datetime
+    import os as os_mod
 
+    epochs = params.get('epochs', 1000)
+
+    _log(job, f'加载模型: {model_yaml} / {model_pt}')
     model = YOLO(os.path.join(_PROJ_ROOT, 'cfg', 'models', 'v8', f'{model_yaml}.yaml')).load(
         os.path.join(_PROJ_ROOT, 'models', f'{model_pt}.pt'))
 
     data_path = os.path.join(_PROJ_ROOT, 'cfg', 'datasets', f'{data_yaml}.yaml')
-    model.train(
-        data=data_path,
-        epochs=params.get('epochs', 1000),
-        batch=params.get('batch', 16),
-        patience=params.get('patience', 200),
-        imgsz=params.get('imgsz', 640),
-        device=params.get('device', 0),
-        pretrained=True,
-        plots=True,
-    )
+    _log(job, f'开始训练, epochs={epochs}, batch={params.get("batch", 16)}')
 
-    model.val()
+    # 添加进度回调
+    _orig_on_train_epoch_end = BaseTrainer.on_train_epoch_end
+
+    def _epoch_callback(self):
+        _orig_on_train_epoch_end(self)
+        if hasattr(self, 'epoch') and self.epoch is not None:
+            _progress(job, self.epoch + 1, epochs)
+            _log(job, f'Epoch {self.epoch + 1}/{epochs}')
+
+    BaseTrainer.on_train_epoch_end = _epoch_callback
+
+    try:
+        results = model.train(
+            data=data_path,
+            epochs=epochs,
+            batch=params.get('batch', 16),
+            patience=params.get('patience', 200),
+            imgsz=params.get('imgsz', 640),
+            device=params.get('device', 0),
+            pretrained=True,
+            plots=True,
+        )
+    finally:
+        BaseTrainer.on_train_epoch_end = _orig_on_train_epoch_end
+
+    _log(job, '训练完成，开始评估...')
+    val_results = model.val()
+    metrics = val_results.results_dict if val_results else {}
+
+    # 保存模型
     version = datetime.now().strftime('%Y%m%d%H%M%S')
-    save_path = os.path.join(_CV_ULTRA, 'trained_models', f'model_v{version}')
-    os.makedirs(save_path, exist_ok=True)
-    model.save(os.path.join(save_path, 'model.pt'))
-    print(f'训练完成，模型已保存至: {save_path}')
-    return save_path
+    save_dir = os.path.join(_CV_ULTRA, 'trained_models', f'model_v{version}')
+    os.makedirs(save_dir, exist_ok=True)
+    model_path = os.path.join(save_dir, 'model.pt')
+    model.save(model_path)
+
+    _log(job, f'模型已保存: model_v{version}')
+    _log(job, f'指标: mAP50={metrics.get("metrics/mAP50(B)", "N/A")}')
+
+    # 记录到 DB
+    from .models import TrainedModel
+    TrainedModel.objects.create(
+        job=job,
+        name=f'model_v{version}.pt',
+        file_path=model_path,
+        file_size=os_mod.path.getsize(model_path),
+        metrics=metrics,
+    )
+    job.result = metrics
+    job.save()
+
+    return save_dir

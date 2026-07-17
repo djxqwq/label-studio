@@ -45,6 +45,13 @@ services:
       - ./mydata:/label-studio/data:rw
       - ./cv-ultralytics:/label-studio/cv-ultralytics:rw
     command: label-studio-uwsgi
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   db:
     image: pgautoupgrade/pgautoupgrade:13-alpine

@@ -78,6 +78,12 @@ export const API_CONFIG = {
     createTrainConfig: "POST:/train/configs",
     deleteTrainConfig: "DELETE:/train/configs/:pk",
     startTrain: "POST:/projects/:pk/train",
+    trainStatus: "GET:/projects/:pk/train/status",
+    trainLogs: "GET:/projects/:pk/train/logs",
+    stopTrain: "POST:/projects/:pk/train/stop",
+    trainModels: "GET:/projects/:pk/train/models",
+    downloadModel: "GET:/projects/:pk/train/models/:mid/download",
+    deleteModel: "DELETE:/projects/:pk/train/models/:mid",
 
     // Export
     export: "/projects/:pk/export",

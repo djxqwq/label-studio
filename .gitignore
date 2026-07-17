@@ -87,3 +87,7 @@ web/libs/editor/tests/coverage
 docs/*
 web/libs/editor/public/files/*.mp*
 .cursor
+
+# 本地启动脚本（不上传）
+start-frontend.bat
+start-backend.bat

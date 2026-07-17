@@ -68,6 +68,9 @@ class TrainingJob(models.Model):
     config_name = models.CharField(max_length=255)
     task_id = models.CharField(max_length=64, unique=True, default=uuid.uuid4, editable=False)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    progress = models.IntegerField(default=0, help_text="0-100")
+    current_epoch = models.IntegerField(default=0)
+    total_epochs = models.IntegerField(default=0)
     params = models.JSONField(default=dict)
     result = models.JSONField(default=dict, null=True, blank=True)
     error_message = models.TextField(blank=True, default='')
@@ -76,3 +79,50 @@ class TrainingJob(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'config_name': self.config_name,
+            'status': self.status,
+            'progress': self.progress,
+            'current_epoch': self.current_epoch,
+            'total_epochs': self.total_epochs,
+            'params': self.params,
+            'result': self.result,
+            'error_message': self.error_message,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
+        }
+
+
+class TrainingLog(models.Model):
+    """训练日志行"""
+    job = models.ForeignKey(TrainingJob, on_delete=models.CASCADE, related_name='logs')
+    level = models.CharField(max_length=10, default='INFO')
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+
+class TrainedModel(models.Model):
+    """训练完成的模型文件"""
+    job = models.ForeignKey(TrainingJob, on_delete=models.CASCADE, related_name='models')
+    name = models.CharField(max_length=255)
+    file_path = models.CharField(max_length=1024)
+    file_size = models.BigIntegerField(default=0)
+    metrics = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'file_size': self.file_size,
+            'metrics': self.metrics,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
+        }

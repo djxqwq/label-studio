@@ -1,6 +1,6 @@
 # Label Studio (改造版)
 
-基于 [HumanSignal/label-studio](https://github.com/HumanSignal/label-studio) 的二次开发版本，在原有数据标注功能基础上增加了 **超级管理员（Superuser）权限体系** 和 **多组织管理能力**。
+基于 [HumanSignal/label-studio](https://github.com/HumanSignal/label-studio) 的二次开发版本，在原有数据标注功能基础上增加了 **超级管理员（Superuser）权限体系**、**多组织管理能力** 和 **YOLO 模型训练集成**。
 
 ---
 
@@ -96,28 +96,53 @@
 - 置空指向该组织的用户的 `active_organization`
 - 最终删除组织本身
 
+### 6. YOLO 模型训练集成
+
+集成 `cv-ultralytics` 训练引擎，支持在标注平台内直接训练 YOLO 模型：
+
+- **一键训练**：标注完成后，点击"训练"按钮即可启动训练
+- **自动数据流转**：系统自动导出 YOLO 格式数据、划分训练集/验证集/测试集、生成 data.yaml
+- **训练进度监控**：实时查看训练进度、日志、评估指标
+- **模型管理**：下载训练好的模型、删除旧模型
+- **模型配置管理**：支持新建/删除模型配置（OBB、Detect 等）
+- **GPU 支持**：Docker 部署自动使用 GPU 加速
+
+支持的训练任务类型：
+- `obb`：旋转边界框检测（Oriented Bounding Box）
+- `detect`：标准目标检测
+- `cls`：图像分类（预留）
+- `seg`：实例分割（预留）
+
 ---
 
 ## 如何启动
 
 ### 方式一：Docker Compose（推荐）
 
-使用 Docker Compose 启动完整的生产级栈（Label Studio + Nginx + PostgreSQL）：
+使用 Docker Compose 启动完整的生产级栈（Label Studio + Nginx + PostgreSQL），**已配置 GPU 支持**：
 
 ```bash
 # 1. 构建并启动所有服务
 docker compose up --build
 
-# 2.（可选）首次启动后运行数据库迁移
+# 2.（首次启动）运行数据库迁移
 docker compose run app python3 /label-studio/label_studio/manage.py migrate
 
-# 3.（可选）收集静态文件
+# 3.（首次启动）创建超级管理员
+docker compose run app python3 /label-studio/label_studio/manage.py createsuperuser
+
+# 4.（可选）收集静态文件
 docker compose run app python3 /label-studio/label_studio/manage.py collectstatic
 ```
 
 启动后访问 `http://localhost:8080`。
 
-数据持久化目录为 `./mydata`（SQLite 数据库、上传文件等）。PostgreSQL 数据存储在 `./postgres-data`。
+数据持久化目录为 `./mydata`（SQLite 数据库、上传文件等）。PostgreSQL 数据存储在 `./postgres-data`。训练引擎目录 `./cv-ultralytics` 已自动挂载到容器内。
+
+**GPU 要求：**
+- 服务器需安装 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+- `docker-compose.yml` 已配置 GPU 透传（`deploy.resources.reservations.devices`）
+- Dockerfile 已安装 CUDA 11.8 版本的 PyTorch
 
 **开发模式（支持前端 HMR 热更新）：**
 
@@ -139,7 +164,7 @@ docker compose up --build
 # 1. 安装 Poetry
 pip install poetry
 
-# 2. 安装项目依赖
+# 2. 安装项目依赖（包含 YOLO 训练依赖：torch、ultralytics 等）
 poetry install
 
 # 3. 运行数据库迁移
@@ -181,12 +206,54 @@ cd web && yarn run build
 ### 方式三：Docker 单容器
 
 ```bash
-# 构建镜像
+# 构建镜像（已包含 YOLO 训练依赖）
 docker build -t label-studio:latest .
 
-# 运行
-docker run -it -p 8080:8080 -v $(pwd)/mydata:/label-studio/data label-studio:latest
+# 运行（需挂载数据目录和训练引擎目录）
+docker run -it -p 8080:8080 \
+  -v $(pwd)/mydata:/label-studio/data \
+  -v $(pwd)/cv-ultralytics:/label-studio/cv-ultralytics \
+  --gpus all \
+  label-studio:latest
 ```
+
+## 更新项目
+
+当仓库有新代码推送后，按以下步骤更新：
+
+```bash
+# 1. 拉取最新代码
+git pull
+
+# 2. Docker Compose 部署：重新构建并启动
+docker compose up --build
+
+# 3. 运行数据库迁移（如果有新表或字段变更）
+docker compose run app python3 /label-studio/label_studio/manage.py migrate
+```
+
+**本地开发环境更新：**
+
+```bash
+# 1. 拉取最新代码
+git pull
+
+# 2. 更新 Python 依赖（如果 pyproject.toml 有变化）
+poetry install
+
+# 3. 更新前端依赖（如果 package.json 有变化）
+cd web && yarn install
+
+# 4. 运行数据库迁移
+poetry run python label_studio/manage.py migrate
+
+# 5. 重启后端服务
+make run-dev
+```
+
+> **注意**：每次更新后务必检查是否有数据库迁移需要执行，否则新增功能可能无法正常使用。
+
+---
 
 ## 生产打包 / 发布
 
@@ -288,12 +355,32 @@ curl -X PATCH -H "Authorization: Token <superuser_token>" \
   http://localhost:8080/api/organizations/user/3/active-organization
 ```
 
+### 获取训练模型配置列表
+
+```bash
+curl -H "Authorization: Token <token>" \
+  http://localhost:8080/api/train/configs
+```
+
+### 启动训练
+
+```bash
+curl -X POST -H "Authorization: Token <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"config_name": "tree-obb"}' \
+  http://localhost:8080/api/projects/1/train
+```
+
 ---
 
 ## 项目结构
 
 ```
 label-studio/
+├── cv-ultralytics/                # ✨ YOLO 训练引擎
+│   ├── train/                     # 训练脚本
+│   ├── datasets_process/          # 数据处理工具
+│   └── ultralytics/               # YOLO 框架
 ├── label_studio/                  # Django 后端
 │   ├── core/
 │   │   ├── permissions.py         # ✏️ 权限体系改造（Superuser 权限）
@@ -314,6 +401,12 @@ label-studio/
 │   │   ├── mixins.py              # ✏️ access_token 安全获取
 │   │   ├── models.py              # ✏️ access_token 安全获取
 │   ├── jwt_auth/models.py         # ✏️ created_by_id 修复
+│   ├── training/                  # ✨ 训练模块
+│   │   ├── api.py                 # ✨ 训练 API（配置管理、启动训练、状态查询等）
+│   │   ├── models.py              # ✨ 训练任务、模型配置、训练日志、训练模型数据模型
+│   │   ├── tasks.py               # ✨ 训练任务执行逻辑
+│   │   ├── urls.py                # ✨ 训练模块路由
+│   │   └── migrations/            # ✨ 数据库迁移
 │   └── ...
 ├── web/                            # React 前端
 │   ├── apps/labelstudio/src/
@@ -328,14 +421,17 @@ label-studio/
 │   │   │   │       ├── SelectedUserPanel.jsx # ✨ 新增用户组织管理面板
 │   │   │   │       ├── PeopleList.jsx       # ✏️ 改造为支持 organizationId
 │   │   │   │       └── PeoplePage.jsx       # ✏️ 改造为 Superuser 限定
-│   │   │   └── index.js           # ✏️ 注册 PeoplePage 路由
+│   │   │   └── index.js           # ✏️ 注册 PeoplePage、TrainingPage 路由
+│   │   │   └── TrainingPage/      # ✨ 训练页面
+│   │   │       ├── TrainingPage.jsx # ✨ 训练页面组件
+│   │   │       └── TrainingPage.scss # ✨ 训练页面样式
 │   ├── libs/core/src/types/user.ts # ✏️ 新增 is_superuser 类型
 │   └── ...
-├── docker-compose.yml              # 生产部署配置
-├── Dockerfile                      # 生产镜像构建
+├── docker-compose.yml              # 生产部署配置（已配置 GPU 支持）
+├── Dockerfile                      # 生产镜像构建（已包含 YOLO 训练依赖）
 ├── Dockerfile.development          # 开发镜像构建
 ├── Makefile                        # 开发快捷命令
-├── pyproject.toml                  # Python 项目配置
+├── pyproject.toml                  # Python 项目配置（已包含 YOLO 训练依赖）
 └── ...
 ```
 

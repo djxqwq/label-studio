@@ -140,6 +140,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         gnupg2 curl nginx; \
     apt-get autoremove -y
 
+# YOLO 训练依赖（GPU版本 - CUDA 11.8）
+RUN pip install --no-cache-dir opencv-python-headless
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --no-cache-dir ultralytics
+
 RUN set -eux; \
     mkdir -p $LS_DIR $LABEL_STUDIO_BASE_DATA_DIR $OPT_DIR && \
     chown -R 1001:0 $LS_DIR $LABEL_STUDIO_BASE_DATA_DIR $OPT_DIR /var/log/nginx /etc/nginx
