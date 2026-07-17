@@ -117,6 +117,7 @@ class TrainStartAPI(APIView):
                 )
                 job.status = 'completed'; job.progress = 100; job.save()
             except Exception as e:
+                logger.exception(f'训练失败: {e}')
                 job.status = 'failed'; job.error_message = str(e); job.save()
 
         threading.Thread(target=_train, daemon=True).start()
