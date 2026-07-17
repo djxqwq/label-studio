@@ -1,0 +1,9 @@
+import os
+import sys
+
+project_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(project_path)
+
+from train import train_task
+
+train_task.do_train("yolov8x", "yolov8x-oiv7", "orange-detect")
