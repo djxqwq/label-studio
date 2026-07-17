@@ -141,9 +141,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get autoremove -y
 
 # YOLO 训练依赖（GPU版本 - CUDA 11.8）
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN pip install --no-cache-dir opencv-python-headless
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --no-cache-dir torch torchvision --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu118
 RUN pip install --no-cache-dir ultralytics
+ENV PIP_INDEX_URL=
 
 RUN set -eux; \
     mkdir -p $LS_DIR $LABEL_STUDIO_BASE_DATA_DIR $OPT_DIR && \

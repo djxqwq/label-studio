@@ -219,6 +219,11 @@ exclude = [
 
 requires-poetry = '>=2.0.0,<3.0.0'
 
+[[tool.poetry.source]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+priority = "default"
+
 [tool.poetry.dependencies]
 python = ">=3.10,<4"
 
