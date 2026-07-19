@@ -405,6 +405,33 @@ def get_github_assets(repo="ultralytics/assets", version="latest", retry=False):
     return data["tag_name"], [x["name"] for x in data["assets"]]  # tag, assets i.e. ['yolov8n.pt', 'yolov8s.pt', ...]
 
 
+def _try_mirror_download(url, file, min_bytes=1e5, **kwargs):
+    """Try downloading from a list of mirror proxies when direct GitHub access fails."""
+    # Extract filename from URL
+    filename = Path(file).name if file else url.split('/')[-1]
+    
+    # Try multiple download sources
+    mirrors = [
+        # Ultralytics official CDN (fastest and most reliable)
+        f"https://ultralytics.com/assets/{filename}",
+        # GitHub mirrors
+        f"https://ghproxy.net/{url}",
+        f"https://gh-proxy.cn/{url}",
+        f"https://gh.ddlc.top/{url}",
+    ]
+    
+    for mirror_url in mirrors:
+        try:
+            LOGGER.info(f"Trying mirror: {mirror_url[:80]}...")
+            safe_download(url=mirror_url, file=file, min_bytes=min_bytes, **kwargs)
+            if Path(file).exists() and Path(file).stat().st_size > min_bytes:
+                return True
+        except Exception as e:
+            LOGGER.warning(f"Mirror failed: {mirror_url[:80]}: {e}")
+            continue
+    return False
+
+
 def attempt_download_asset(file, repo="ultralytics/assets", release="v8.2.0", **kwargs):
     """
     Attempt to download a file from GitHub release assets if it is not found locally. The function checks for the file
@@ -444,17 +471,31 @@ def attempt_download_asset(file, repo="ultralytics/assets", release="v8.2.0", **
             if Path(file).is_file():
                 LOGGER.info(f"Found {clean_url(url)} locally at {file}")  # file already exists
             else:
-                safe_download(url=url, file=file, min_bytes=1e5, **kwargs)
+                # 先尝试镜像
+                if not _try_mirror_download(url, file, min_bytes=1e5, **kwargs):
+                    # 镜像失败才尝试直连
+                    LOGGER.warning("All mirrors failed, trying direct GitHub download...")
+                    safe_download(url=url, file=file, min_bytes=1e5, **kwargs)
 
         elif repo == GITHUB_ASSETS_REPO and name in GITHUB_ASSETS_NAMES:
-            safe_download(url=f"{download_url}/{release}/{name}", file=file, min_bytes=1e5, **kwargs)
+            url = f"{download_url}/{release}/{name}"
+            # 先尝试镜像
+            if not _try_mirror_download(url, file, min_bytes=1e5, **kwargs):
+                # 镜像失败才尝试直连
+                LOGGER.warning("All mirrors failed, trying direct GitHub download...")
+                safe_download(url=url, file=file, min_bytes=1e5, **kwargs)
 
         else:
             tag, assets = get_github_assets(repo, release)
             if not assets:
                 tag, assets = get_github_assets(repo)  # latest release
             if name in assets:
-                safe_download(url=f"{download_url}/{tag}/{name}", file=file, min_bytes=1e5, **kwargs)
+                url = f"{download_url}/{tag}/{name}"
+                # 先尝试镜像
+                if not _try_mirror_download(url, file, min_bytes=1e5, **kwargs):
+                    # 镜像失败才尝试直连
+                    LOGGER.warning("All mirrors failed, trying direct GitHub download...")
+                    safe_download(url=url, file=file, min_bytes=1e5, **kwargs)
 
         return str(file)
 

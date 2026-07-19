@@ -778,7 +778,7 @@ def torch_safe_load(weight):
                 "ultralytics.nn.tasks.YOLOv10DetectionModel": "ultralytics.nn.tasks.DetectionModel",  # YOLOv10
             },
         ):
-            ckpt = torch.load(file, map_location="cpu")
+            ckpt = torch.load(file, map_location="cpu", weights_only=False)
 
     except ModuleNotFoundError as e:  # e.name is missing module name
         if e.name == "models":

@@ -101,55 +101,121 @@ names:
     return True
 
 
+def _download_model_weights(model_name: str, dest_dir: str) -> str:
+    """
+    下载预训练权重，优先从本地和镜像下载。
+    返回权重文件路径，失败抛 RuntimeError。
+    """
+    import requests
+    from pathlib import Path
+
+    dest_path = Path(dest_dir) / f'{model_name}.pt'
+    if dest_path.exists():
+        return str(dest_path)
+
+    # 下载源优先级：官方 CDN > 镜像 > GitHub 直连
+    base_url = f'https://github.com/ultralytics/assets/releases/download/v8.2.0/{model_name}.pt'
+    mirrors = [
+        f'https://ultralytics.com/assets/{model_name}.pt',  # 官方 CDN
+        f'https://ghproxy.net/{base_url}',
+        f'https://gh-proxy.cn/{base_url}',
+        f'https://gh.ddlc.top/{base_url}',
+        base_url,  # 最后尝试直连
+    ]
+
+    last_error = None
+    for url in mirrors:
+        try:
+            resp = requests.get(url, timeout=30, stream=True)
+            if resp.status_code == 200:
+                total = int(resp.headers.get('content-length', 0))
+                with open(dest_path, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                # 校验文件大小（权重文件至少 1MB）
+                if dest_path.stat().st_size > 1_000_000:
+                    return str(dest_path)
+                else:
+                    dest_path.unlink(missing_ok=True)
+        except Exception as e:
+            last_error = e
+            continue
+
+    raise RuntimeError(
+        f'无法下载 {model_name}.pt，已尝试 {len(mirrors)} 个源。\n'
+        f'请手动下载后放到 {dest_dir} 目录下。\n'
+        f'下载地址: {base_url}\n'
+        f'最后错误: {last_error}'
+    )
+
+
 def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
     """直接调 YOLO model.train()，写进度和日志到 DB"""
     from ultralytics import YOLO
-    from ultralytics.engine.trainer import BaseTrainer
+    from ultralytics.utils import SETTINGS
     from datetime import datetime
     import os as os_mod
 
     epochs = params.get('epochs', 1000)
 
+    # 指定权重目录，避免 ultralytics 下载到系统临时目录
+    _models_dir = os.path.join(_PROJ_ROOT, 'models')
+    os.makedirs(_models_dir, exist_ok=True)
+    SETTINGS['weights_dir'] = _models_dir
+
     # 加载模型架构和预训练权重
     model_yaml_path = os.path.join(_PROJ_ROOT, 'cfg', 'models', 'v8', f'{model_yaml}.yaml')
-    model_pt_path = os.path.join(_PROJ_ROOT, 'models', f'{model_pt}.pt')
+    model_pt_path = os.path.join(_models_dir, f'{model_pt}.pt')
 
     _log(job, f'加载模型: {model_yaml} / {model_pt}')
     if os.path.exists(model_pt_path):
         # 本地有预训练权重，用 yaml 架构 + 本地权重
+        _log(job, f'使用本地权重: {model_pt_path}')
         model = YOLO(model_yaml_path).load(model_pt_path)
     else:
-        # 本地没有，让 YOLO() 构造函数自动从网络下载（标准权重名如 yolov8x.pt）
-        _log(job, f'本地权重不存在，自动下载 {model_pt}.pt')
-        model = YOLO(f'{model_pt}.pt')
+        # 尝试通过镜像下载
+        _log(job, f'本地权重不存在，尝试下载 {model_pt}.pt ...')
+        try:
+            downloaded = _download_model_weights(model_pt, _models_dir)
+            _log(job, f'下载成功: {downloaded}')
+            model = YOLO(model_yaml_path).load(downloaded)
+        except RuntimeError:
+            # 下载失败，尝试让 YOLO 自带下载（作为兜底）
+            _log(job, f'镜像下载失败，回退到 YOLO 自带下载 ...')
+            model = YOLO(f'{model_pt}.pt')
 
     data_path = os.path.join(_PROJ_ROOT, 'cfg', 'datasets', f'{data_yaml}.yaml')
     _log(job, f'开始训练, epochs={epochs}, batch={params.get("batch", 16)}')
 
-    # 添加进度回调
-    _orig_on_train_epoch_end = BaseTrainer.on_train_epoch_end
+    # 添加进度回调（使用 callback 机制）
+    def _epoch_callback(trainer):
+        if hasattr(trainer, 'epoch') and trainer.epoch is not None:
+            _progress(job, trainer.epoch + 1, epochs)
+            _log(job, f'Epoch {trainer.epoch + 1}/{epochs}')
 
-    def _epoch_callback(self):
-        _orig_on_train_epoch_end(self)
-        if hasattr(self, 'epoch') and self.epoch is not None:
-            _progress(job, self.epoch + 1, epochs)
-            _log(job, f'Epoch {self.epoch + 1}/{epochs}')
+    model.add_callback("on_train_epoch_end", _epoch_callback)
 
-    BaseTrainer.on_train_epoch_end = _epoch_callback
+    # 自动检测 GPU：有 CUDA 用 GPU，没有用 CPU
+    import torch
+    device = params.get('device', 'auto')
+    # 如果配置了 GPU 但没有 CUDA，自动回退到 CPU
+    if device != 'cpu' and not torch.cuda.is_available():
+        device = 'cpu'
+        _log(job, f'CUDA 不可用，使用 CPU 训练')
+    elif device == 'auto':
+        device = 0 if torch.cuda.is_available() else 'cpu'
+        _log(job, f'自动选择设备: {device}')
 
-    try:
-        results = model.train(
-            data=data_path,
-            epochs=epochs,
-            batch=params.get('batch', 16),
-            patience=params.get('patience', 200),
-            imgsz=params.get('imgsz', 640),
-            device=params.get('device', 0),
-            pretrained=True,
-            plots=True,
-        )
-    finally:
-        BaseTrainer.on_train_epoch_end = _orig_on_train_epoch_end
+    results = model.train(
+        data=data_path,
+        epochs=epochs,
+        batch=params.get('batch', 16),
+        patience=params.get('patience', 200),
+        imgsz=params.get('imgsz', 640),
+        device=device,
+        pretrained=True,
+        plots=True,
+    )
 
     _log(job, '训练完成，开始评估...')
     val_results = model.val()

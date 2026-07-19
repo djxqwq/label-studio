@@ -129,6 +129,7 @@ class TrainStartAPI(APIView):
         from data_export.serializers import ExportDataSerializer
         from tasks.models import Task
         from core.utils.common import batch
+        from django.conf import settings as django_settings
 
         project = Project.objects.get(pk=pk)
         tasks = []
@@ -142,12 +143,24 @@ class TrainStartAPI(APIView):
         if not tasks:
             raise ValueError('没有标注数据')
 
-        export_file, _, _ = DataExport.generate_export_file(
-            project, tasks, 'YOLO', download_resources=True,
-            get_args=request.GET, hostname=request.build_absolute_uri('/'),
-        )
+        # 确保临时目录和图片文件在同一盘符，避免 Windows 跨盘符 os.path.relpath() 报错
+        _saved_tmp = os.environ.get('TMP'), os.environ.get('TEMP'), os.environ.get('TMPDIR')
+        _tmp_on_data = os.path.join(django_settings.BASE_DATA_DIR, 'tmp')
+        os.makedirs(_tmp_on_data, exist_ok=True)
+        os.environ['TMP'] = os.environ['TEMP'] = os.environ['TMPDIR'] = _tmp_on_data
+        try:
+            export_file, _, _ = DataExport.generate_export_file(
+                project, tasks, 'YOLO', download_resources=True,
+                get_args=request.GET, hostname=request.build_absolute_uri('/'),
+            )
+        finally:
+            for key, val in zip(('TMP', 'TEMP', 'TMPDIR'), _saved_tmp):
+                if val is not None:
+                    os.environ[key] = val
+                else:
+                    os.environ.pop(key, None)
 
-        export_dir = tempfile.mkdtemp(prefix=f'ls_train_{pk}_')
+        export_dir = tempfile.mkdtemp(dir=_tmp_on_data, prefix=f'ls_train_{pk}_')
         if hasattr(export_file, 'read'):
             data = export_file.read(); export_file.close()
         elif isinstance(export_file, str) and os.path.isfile(export_file):
