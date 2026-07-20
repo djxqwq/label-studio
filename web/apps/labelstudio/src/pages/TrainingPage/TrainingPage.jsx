@@ -74,13 +74,18 @@ export const TrainingPage = () => {
   const pollStatus = useCallback(() => {
     api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
       if (!data || data.status === "none") { setJobStatus("none"); return; }
+      const prevStatus = jobStatus;
       setJobStatus(data.status);
       setJobProgress(data.progress || 0);
       setJobCurrentEpoch(data.current_epoch || 0);
       setJobTotalEpochs(data.total_epochs || 0);
       setJobResult(data.result || null);
+      // 训练完成/失败时，重新加载模型列表
+      if ((data.status === "completed" || data.status === "failed") && prevStatus !== data.status) {
+        loadModels();
+      }
     }).catch(() => {});
-  }, [api, pageParams.id]);
+  }, [api, pageParams.id, jobStatus]);
 
   const pollLogs = useCallback(() => {
     api.callApi("trainLogs", { params: { pk: pageParams.id, since: lastLogId } }).then((data) => {
