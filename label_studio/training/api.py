@@ -90,7 +90,7 @@ class TrainStartAPI(APIView):
         if not config:
             return Response({'error': f'未知模型: {config_name}'}, status=400)
 
-        export_dir = self._do_yolo_export(request, pk)
+        export_dir = self._do_yolo_export(request, pk, config)
         params = serializer.validated_data
         project = Project.objects.get(pk=pk)
 
@@ -123,7 +123,7 @@ class TrainStartAPI(APIView):
         threading.Thread(target=_train, daemon=True).start()
         return Response({'job_id': job.id, 'status': 'building'}, status=status.HTTP_201_CREATED)
 
-    def _do_yolo_export(self, request, pk):
+    def _do_yolo_export(self, request, pk, config):
         import io, tempfile, zipfile
         from data_export.models import DataExport
         from data_export.serializers import ExportDataSerializer
