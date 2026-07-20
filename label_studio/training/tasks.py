@@ -34,9 +34,9 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     logger = logging.getLogger(__name__)
 
     dst = os.path.join(_CV_ULTRA, 'datasets', dataset_name, task_type)
-    logger.info(f'build_dataset: dataset_name={dataset_name}, task_type={task_type}')
-    logger.info(f'build_dataset: export_dir={export_dir}')
-    logger.info(f'build_dataset: dst={dst}')
+    print(f'[DEBUG] build_dataset: dataset_name={dataset_name}, task_type={task_type}')
+    print(f'[DEBUG] build_dataset: export_dir={export_dir}')
+    print(f'[DEBUG] build_dataset: dst={dst}')
 
     for phase in ['train', 'valid', 'test']:
         for sub in ['images', 'labels']:
@@ -45,13 +45,13 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     src_img = os.path.join(export_dir, 'images')
     src_lbl = os.path.join(export_dir, 'labels')
 
-    logger.info(f'build_dataset: 初始 src_img={src_img}, 存在={os.path.isdir(src_img)}')
-    logger.info(f'build_dataset: 初始 src_lbl={src_lbl}, 存在={os.path.isdir(src_lbl)}')
+    print(f'[DEBUG] build_dataset: 初始 src_img={src_img}, 存在={os.path.isdir(src_img)}')
+    print(f'[DEBUG] build_dataset: 初始 src_lbl={src_lbl}, 存在={os.path.isdir(src_lbl)}')
 
     if os.path.exists(export_dir):
-        logger.info(f'build_dataset: export_dir 内容: {os.listdir(export_dir)}')
+        print(f'[DEBUG] build_dataset: export_dir 内容: {os.listdir(export_dir)}')
     else:
-        logger.error(f'build_dataset: export_dir 不存在!')
+        print(f'[DEBUG] build_dataset: export_dir 不存在!')
         raise FileNotFoundError(f'导出目录不存在: {export_dir}')
 
     if not os.path.isdir(src_img):
@@ -59,23 +59,23 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
             p = os.path.join(export_dir, item)
             if os.path.isdir(p):
                 has_images = os.path.isdir(os.path.join(p, 'images'))
-                logger.info(f'build_dataset: 子目录 {item}, has_images={has_images}')
+                print(f'[DEBUG] build_dataset: 子目录 {item}, has_images={has_images}')
                 if has_images:
                     src_img = os.path.join(p, 'images')
                     src_lbl = os.path.join(p, 'labels')
-                    logger.info(f'build_dataset: 找到子目录, src_img={src_img}')
+                    print(f'[DEBUG] build_dataset: 找到子目录, src_img={src_img}')
                     break
 
-    logger.info(f'build_dataset: 最终 src_img={src_img}, 存在={os.path.isdir(src_img)}')
-    logger.info(f'build_dataset: 最终 src_lbl={src_lbl}, 存在={os.path.isdir(src_lbl)}')
+    print(f'[DEBUG] build_dataset: 最终 src_img={src_img}, 存在={os.path.isdir(src_img)}')
+    print(f'[DEBUG] build_dataset: 最终 src_lbl={src_lbl}, 存在={os.path.isdir(src_lbl)}')
 
     if not os.path.isdir(src_img) or not os.path.isdir(src_lbl):
         raise FileNotFoundError(f'导出数据不完整: images={os.path.isdir(src_img)}, labels={os.path.isdir(src_lbl)}')
 
     img_files = os.listdir(src_img)
-    logger.info(f'build_dataset: images 目录文件数={len(img_files)}, 前5个={img_files[:5]}')
+    print(f'[DEBUG] build_dataset: images 目录文件数={len(img_files)}, 前5个={img_files[:5]}')
     lbl_files = os.listdir(src_lbl)
-    logger.info(f'build_dataset: labels 目录文件数={len(lbl_files)}, 前5个={lbl_files[:5]}')
+    print(f'[DEBUG] build_dataset: labels 目录文件数={len(lbl_files)}, 前5个={lbl_files[:5]}')
 
     pairs = []
     for img_file in img_files:
@@ -86,10 +86,10 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
                 if os.path.exists(lbl_file):
                     pairs.append((img_file, lbl_file))
                 else:
-                    logger.warning(f'build_dataset: 图片 {img_file} 没有对应的标签文件')
+                    print(f'[DEBUG] build_dataset: 图片 {img_file} 没有对应的标签文件')
                 break
 
-    logger.info(f'build_dataset: 找到 {len(pairs)} 对图片-标签')
+    print(f'[DEBUG] build_dataset: 找到 {len(pairs)} 对图片-标签')
 
     random.shuffle(pairs)
     total = len(pairs)
