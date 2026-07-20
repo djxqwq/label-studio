@@ -260,7 +260,7 @@ const TrainLogs = () => {
     api.callApi("trainLogs", { params: { pk: pageParams.id } }).then((data) => {
       setLogs(Array.isArray(data) ? data : (data?.logs || []));
     }).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pageParams.id]);
 
   useEffect(() => {
     loadLogs();
@@ -329,7 +329,7 @@ const ModelManagement = () => {
     api.callApi("trainModels", { params: { pk: pageParams.id } }).then((res) => {
       setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {}).finally(() => setLoading(false));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pageParams.id]);
 
   useEffect(() => {
     loadModels();
@@ -471,13 +471,29 @@ const ConfigManagement = () => {
     loadConfigs();
   };
 
+  const newConfig = () => {
+    const empty = { name: "", task_type: "obb", pretrained: "", classes: [], epochs: 1000, batch: 16, patience: 200, imgsz: 640, device: "0" };
+    setSelectedConfig(empty);
+    setFormData({
+      name: "",
+      task_type: "obb",
+      pretrained: "",
+      classes: "",
+      epochs: 1000,
+      batch: 16,
+      patience: 200,
+      imgsz: 640,
+      device: "0",
+    });
+  };
+
   return (
     <Block name="training-page">
       <Elem name="panel">
         <Elem name="panel-title">配置管理</Elem>
 
         <Space style={{ marginBottom: 16 }}>
-          <Button look="outlined" onClick={() => {}}>
+          <Button look="outlined" onClick={newConfig}>
             + 新建配置
           </Button>
         </Space>
