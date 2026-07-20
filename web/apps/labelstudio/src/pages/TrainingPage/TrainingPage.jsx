@@ -583,10 +583,10 @@ export const TrainingPage = {
   layout: TrainingLayout,
   component: StartTrain,
   pages: {
-    start: StartTrain,
-    progress: TrainProgress,
-    logs: TrainLogs,
-    models: ModelManagement,
-    configs: ConfigManagement,
+    start: { path: "/start", component: StartTrain },
+    progress: { path: "/progress", component: TrainProgress },
+    logs: { path: "/logs", component: TrainLogs },
+    models: { path: "/models", component: ModelManagement },
+    configs: { path: "/configs", component: ConfigManagement },
   },
 };
