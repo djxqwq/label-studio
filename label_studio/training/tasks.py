@@ -197,8 +197,13 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
     )
 
     _log(job, '训练完成，开始评估...')
-    val_results = model.val()
-    metrics = val_results.results_dict if val_results else {}
+    metrics = {}
+    try:
+        val_results = model.val()
+        metrics = val_results.results_dict if val_results else {}
+        _log(job, f'评估完成：mAP50={metrics.get("metrics/mAP50(B)", "N/A")}')
+    except Exception as e:
+        _log(job, f'评估失败（不影响模型保存）：{e}', level='WARNING')
 
     # 保存模型
     version = datetime.now().strftime('%Y%m%d%H%M%S')
@@ -208,7 +213,6 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
     model.save(model_path)
 
     _log(job, f'模型已保存：model_v{version}')
-    _log(job, f'指标：mAP50={metrics.get("metrics/mAP50(B)", "N/A")}')
 
     # 记录到 DB
     from .models import TrainedModel
