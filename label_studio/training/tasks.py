@@ -4,7 +4,8 @@ import sys
 import random
 import shutil
 
-_CV_ULTRA = os.environ.get('CV_ULTRA_PATH', '/label-studio/cv-ultralytics')
+_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+_CV_ULTRA = os.environ.get('CV_ULTRA_PATH', os.path.join(_BASE, 'cv-ultralytics'))
 _ULTRA_SRC = os.path.join(_CV_ULTRA, 'ultralytics')
 if _ULTRA_SRC not in sys.path:
     sys.path.insert(0, _ULTRA_SRC)
