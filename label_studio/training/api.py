@@ -161,6 +161,9 @@ class TrainStartAPI(APIView):
                     os.environ.pop(key, None)
 
         export_dir = tempfile.mkdtemp(dir=_tmp_on_data, prefix=f'ls_train_{pk}_')
+        logger.info(f'_do_yolo_export: export_dir={export_dir}')
+        logger.info(f'_do_yolo_export: 找到 {len(tasks)} 个标注任务')
+
         if hasattr(export_file, 'read'):
             data = export_file.read(); export_file.close()
         elif isinstance(export_file, str) and os.path.isfile(export_file):
@@ -169,8 +172,13 @@ class TrainStartAPI(APIView):
         else:
             raise RuntimeError(f'无法读取导出文件')
 
+        logger.info(f'_do_yolo_export: 导出数据大小={len(data)} bytes')
+
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             zf.extractall(export_dir)
+            logger.info(f'_do_yolo_export: zip 内容={zf.namelist()[:20]}')
+
+        logger.info(f'_do_yolo_export: 解压后目录结构={os.listdir(export_dir)}')
 
         img = os.path.join(export_dir, 'images')
         if not os.path.isdir(img):
@@ -181,6 +189,9 @@ class TrainStartAPI(APIView):
 
         if not os.path.isdir(img):
             raise RuntimeError('导出结构不完整')
+
+        img_count = len(os.listdir(img))
+        logger.info(f'_do_yolo_export: 导出图片数={img_count}')
         return export_dir
 
 
