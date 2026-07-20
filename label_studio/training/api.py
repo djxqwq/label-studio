@@ -149,8 +149,10 @@ class TrainStartAPI(APIView):
         os.makedirs(_tmp_on_data, exist_ok=True)
         os.environ['TMP'] = os.environ['TEMP'] = os.environ['TMPDIR'] = _tmp_on_data
         try:
+            # 根据任务类型选择导出格式：obb 用 YOLO_OBB_WITH_IMAGES，其他用 YOLO_WITH_IMAGES
+            export_format = 'YOLO_OBB_WITH_IMAGES' if config.task_type == 'obb' else 'YOLO_WITH_IMAGES'
             export_file, _, _ = DataExport.generate_export_file(
-                project, tasks, 'YOLO', download_resources=True,
+                project, tasks, export_format, download_resources=True,
                 get_args=request.GET, hostname=request.build_absolute_uri('/'),
             )
         finally:
