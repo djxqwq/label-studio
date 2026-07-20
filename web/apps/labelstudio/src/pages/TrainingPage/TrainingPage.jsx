@@ -162,32 +162,31 @@ const TrainProgress = () => {
 
   const isRunning = jobStatus === "building" || jobStatus === "training" || jobStatus === "pending";
 
-  const pollStatus = useCallback(() => {
-    api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
-      if (!data || data.status === "none") {
-        setJobStatus("none");
-        return;
-      }
-      setJobStatus(data.status);
-      setJobProgress(data.progress || 0);
-      setJobCurrentEpoch(data.current_epoch || 0);
-      setJobTotalEpochs(data.total_epochs || 0);
-      setJobResult(data.result || null);
-    }).catch(() => {});
-  }, [api, pageParams.id]);
-
   useEffect(() => {
-    pollStatus();
-    if (isRunning) {
-      const id = setInterval(pollStatus, 2000);
-      pollingRef.current = id;
-      return () => clearInterval(id);
-    }
-  }, [jobStatus, pollStatus]);
+    let mounted = true;
+
+    const doPoll = () => {
+      api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
+        if (!mounted) return;
+        if (!data || data.status === "none") {
+          setJobStatus("none");
+          return;
+        }
+        setJobStatus(data.status);
+        setJobProgress(data.progress || 0);
+        setJobCurrentEpoch(data.current_epoch || 0);
+        setJobTotalEpochs(data.total_epochs || 0);
+        setJobResult(data.result || null);
+      }).catch(() => {});
+    };
+
+    doPoll();
+    pollingRef.current = setInterval(doPoll, 2000);
+    return () => { mounted = false; if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopTraining = async () => {
     await api.callApi("stopTrain", { params: { pk: pageParams.id } });
-    pollStatus();
   };
 
   const getStatusClass = () => {
@@ -261,7 +260,7 @@ const TrainLogs = () => {
     api.callApi("trainLogs", { params: { pk: pageParams.id } }).then((data) => {
       setLogs(Array.isArray(data) ? data : (data?.logs || []));
     }).catch(() => {});
-  }, [api, pageParams.id]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     loadLogs();
@@ -279,8 +278,7 @@ const TrainLogs = () => {
     log.message?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const clearLogs = async () => {
-    await api.callApi("clearTrainLogs", { params: { pk: pageParams.id } });
+  const clearLogs = () => {
     setLogs([]);
   };
 
@@ -331,7 +329,7 @@ const ModelManagement = () => {
     api.callApi("trainModels", { params: { pk: pageParams.id } }).then((res) => {
       setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {}).finally(() => setLoading(false));
-  }, [api, pageParams.id]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     loadModels();
@@ -339,24 +337,18 @@ const ModelManagement = () => {
 
   const deleteModel = async (modelId) => {
     if (!confirm("确定要删除这个模型吗？")) return;
-    await api.callApi("deleteTrainModel", { params: { pk: pageParams.id, model_id: modelId } });
+    await api.callApi("deleteModel", { params: { pk: pageParams.id, mid: modelId } });
     loadModels();
   };
 
   const downloadModel = (model) => {
-    window.open(`/api/projects/${pageParams.id}/training/models/${model.id}/download`);
+    window.open(`/api/projects/${pageParams.id}/train/models/${model.id}/download`);
   };
 
   return (
     <Block name="training-page">
       <Elem name="panel">
         <Elem name="panel-title">模型管理</Elem>
-
-        <Space style={{ marginBottom: 16 }}>
-          <Button look="outlined" onClick={() => {}}>
-            + 导入模型
-          </Button>
-        </Space>
 
         {loading ? (
           <Elem name="empty">加载中...</Elem>
@@ -414,12 +406,14 @@ const ConfigManagement = () => {
     imgsz: 640,
     device: "0",
   });
+  const initDoneRef = useRef(false);
 
   const loadConfigs = useCallback(() => {
     api.callApi("trainConfigs", {}).then((res) => {
       const list = Array.isArray(res) ? res : (res?.data || res?.results || []);
       setConfigs(list);
-      if (list.length > 0 && !selectedConfig) {
+      if (list.length > 0 && !initDoneRef.current) {
+        initDoneRef.current = true;
         setSelectedConfig(list[0]);
         setFormData({
           name: list[0].name,
@@ -434,7 +428,7 @@ const ConfigManagement = () => {
         });
       }
     }).catch(() => {});
-  }, [api, selectedConfig]);
+  }, [api]);
 
   useEffect(() => {
     loadConfigs();
