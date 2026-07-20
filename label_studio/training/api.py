@@ -1,6 +1,7 @@
 """训练管理 API"""
 import logging
 import os
+import shutil
 import threading
 
 from rest_framework import status
@@ -117,8 +118,13 @@ class TrainStartAPI(APIView):
                 )
                 job.status = 'completed'; job.progress = 100; job.save()
             except Exception as e:
-                logger.exception(f'训练失败: {e}')
+                logger.exception(f'训练失败：{e}')
                 job.status = 'failed'; job.error_message = str(e); job.save()
+            finally:
+                # 清理临时导出目录
+                if os.path.exists(export_dir):
+                    logger.info(f'清理临时目录：{export_dir}')
+                    shutil.rmtree(export_dir, ignore_errors=True)
 
         threading.Thread(target=_train, daemon=True).start()
         return Response({'job_id': job.id, 'status': 'building'}, status=status.HTTP_201_CREATED)
