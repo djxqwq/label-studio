@@ -818,7 +818,10 @@ class Annotator:
 def plot_labels(boxes, cls, names=(), save_dir=Path(""), on_plot=None):
     """Plot training labels including class histograms and box statistics."""
     import pandas  # scope for faster 'import ultralytics'
-    import seaborn  # scope for faster 'import ultralytics'
+    try:
+        import seaborn  # scope for faster 'import ultralytics'
+    except ImportError:
+        seaborn = None  # seaborn optional for plotting
 
     # Filter matplotlib>=3.7.2 warning and Seaborn use_inf and is_categorical FutureWarnings
     warnings.filterwarnings("ignore", category=UserWarning, message="The figure layout has changed to tight")
@@ -831,9 +834,10 @@ def plot_labels(boxes, cls, names=(), save_dir=Path(""), on_plot=None):
     x = pandas.DataFrame(boxes, columns=["x", "y", "width", "height"])
 
     # Seaborn correlogram
-    seaborn.pairplot(x, corner=True, diag_kind="auto", kind="hist", diag_kws=dict(bins=50), plot_kws=dict(pmax=0.9))
-    plt.savefig(save_dir / "labels_correlogram.jpg", dpi=200)
-    plt.close()
+    if seaborn:
+        seaborn.pairplot(x, corner=True, diag_kind="auto", kind="hist", diag_kws=dict(bins=50), plot_kws=dict(pmax=0.9))
+        plt.savefig(save_dir / "labels_correlogram.jpg", dpi=200)
+        plt.close()
 
     # Matplotlib labels
     ax = plt.subplots(2, 2, figsize=(8, 8), tight_layout=True)[1].ravel()
@@ -846,8 +850,9 @@ def plot_labels(boxes, cls, names=(), save_dir=Path(""), on_plot=None):
         ax[0].set_xticklabels(list(names.values()), rotation=90, fontsize=10)
     else:
         ax[0].set_xlabel("classes")
-    seaborn.histplot(x, x="x", y="y", ax=ax[2], bins=50, pmax=0.9)
-    seaborn.histplot(x, x="width", y="height", ax=ax[3], bins=50, pmax=0.9)
+    if seaborn:
+        seaborn.histplot(x, x="x", y="y", ax=ax[2], bins=50, pmax=0.9)
+        seaborn.histplot(x, x="width", y="height", ax=ax[3], bins=50, pmax=0.9)
 
     # Rectangles
     boxes[:, 0:2] = 0.5  # center
@@ -1106,7 +1111,10 @@ def plot_results(file="path/to/results.csv", dir="", segment=False, pose=False, 
         ```
     """
     import pandas as pd  # scope for faster 'import ultralytics'
-    from scipy.ndimage import gaussian_filter1d
+    try:
+        from scipy.ndimage import gaussian_filter1d
+    except ImportError:
+        gaussian_filter1d = None  # scipy optional for plotting
 
     save_dir = Path(file).parent if file else Path(dir)
     if classify:
@@ -1133,7 +1141,8 @@ def plot_results(file="path/to/results.csv", dir="", segment=False, pose=False, 
                 y = data.values[:, j].astype("float")
                 # y[y == 0] = np.nan  # don't show zero values
                 ax[i].plot(x, y, marker=".", label=f.stem, linewidth=2, markersize=8)  # actual results
-                ax[i].plot(x, gaussian_filter1d(y, sigma=3), ":", label="smooth", linewidth=2)  # smoothing line
+                if gaussian_filter1d:
+                    ax[i].plot(x, gaussian_filter1d(y, sigma=3), ":", label="smooth", linewidth=2)  # smoothing line
                 ax[i].set_title(s[j], fontsize=12)
                 # if j in {8, 9, 10}:  # share train and val loss y axes
                 #     ax[i].get_shared_y_axes().join(ax[i], ax[i - 5])
@@ -1192,7 +1201,10 @@ def plot_tune_results(csv_file="tune_results.csv"):
     """
 
     import pandas as pd  # scope for faster 'import ultralytics'
-    from scipy.ndimage import gaussian_filter1d
+    try:
+        from scipy.ndimage import gaussian_filter1d
+    except ImportError:
+        gaussian_filter1d = None  # scipy optional for plotting
 
     def _save_one_file(file):
         """Save one matplotlib plot to 'file'."""
@@ -1226,7 +1238,8 @@ def plot_tune_results(csv_file="tune_results.csv"):
     x = range(1, len(fitness) + 1)
     plt.figure(figsize=(10, 6), tight_layout=True)
     plt.plot(x, fitness, marker="o", linestyle="none", label="fitness")
-    plt.plot(x, gaussian_filter1d(fitness, sigma=3), ":", label="smoothed", linewidth=2)  # smoothing line
+    if gaussian_filter1d:
+        plt.plot(x, gaussian_filter1d(fitness, sigma=3), ":", label="smoothed", linewidth=2)  # smoothing line
     plt.title("Fitness vs Iteration")
     plt.xlabel("Iteration")
     plt.ylabel("Fitness")
