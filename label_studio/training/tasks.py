@@ -35,19 +35,9 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     if _datasets_process not in sys.path:
         sys.path.insert(0, _datasets_process)
 
-    from group_img import log as group_log
+    from group_img import split_dataset
 
     dst = os.path.join(_CV_ULTRA, 'datasets', dataset_name, task_type)
-    group_log.info(f"========== 数据集分割开始 ==========")
-    group_log.info(f"源数据目录：{export_dir}")
-    group_log.info(f"目标数据目录：{dst}")
-
-    # 定义数据集的比例
-    train_ratio = 0.8
-    valid_ratio = 0.15
-    test_ratio = 0.05
-
-    group_log.info(f"分割比例 -> 训练集：{train_ratio}  验证集：{valid_ratio}  测试集：{test_ratio}")
 
     # 获取所有图像文件和标签文件的列表
     src_img = os.path.join(export_dir, 'images')
@@ -60,97 +50,14 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
             if os.path.isdir(p) and os.path.isdir(os.path.join(p, 'images')):
                 src_img = os.path.join(p, 'images')
                 src_lbl = os.path.join(p, 'labels')
+                export_dir = p  # 更新父目录
                 break
 
     if not os.path.isdir(src_img) or not os.path.isdir(src_lbl):
         raise FileNotFoundError(f'导出数据不完整：images={os.path.isdir(src_img)}, labels={os.path.isdir(src_lbl)}')
 
-    images = [f for f in os.listdir(src_img) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-    labels = [f for f in os.listdir(src_lbl) if f.endswith('.txt')]
-
-    group_log.info("---------- 原始数据统计 ----------")
-    group_log.info(f"图像文件总数：{len(images)}")
-    group_log.info(f"标签文件总数：{len(labels)}")
-
-    # 创建一个字典来存储图像和对应的标签文件
-    data_dict = {}
-    skipped = []
-    for img in images:
-        base_name = os.path.splitext(img)[0]
-        txt_file = base_name + '.txt'
-        if txt_file in labels:
-            data_dict[img] = txt_file
-        else:
-            skipped.append(img)
-            group_log.warning(f"跳过无对应标签文件的图像：{img}")
-
-    group_log.info(f"成功配对图像 - 标签数：{len(data_dict)}")
-    group_log.info(f"因缺少标签而跳过的图像数：{len(skipped)}")
-
-    # 将图像和标签文件配对
-    data_pairs = list(data_dict.items())
-
-    # 随机打乱数据集
-    random.shuffle(data_pairs)
-    group_log.info("数据集已随机打乱")
-
-    # 计算每个数据集的大小（保证验证集至少有 1 张）
-    total_data = len(data_pairs)
-    train_size = int(total_data * train_ratio)
-    valid_size = max(1, int(total_data * valid_ratio))  # 保证验证集至少 1 张
-    test_size = total_data - train_size - valid_size
-
-    # 如果测试集为负数，从训练集借
-    if test_size < 0:
-        train_size += test_size
-        test_size = 0
-
-    group_log.info("---------- 分组统计 ----------")
-    group_log.info(f"数据集总量：{total_data}")
-    group_log.info(f"训练集数量：{train_size}（{train_size / total_data * 100:.1f}%）")
-    group_log.info(f"验证集数量：{valid_size}（{valid_size / total_data * 100:.1f}%）")
-    group_log.info(f"测试集数量：{test_size}（{test_size / total_data * 100:.1f}%）")
-
-    # 分割数据集
-    train_data = data_pairs[:train_size]
-    valid_data = data_pairs[train_size:train_size + valid_size]
-    test_data = data_pairs[train_size + valid_size:]
-
-    # 清空目标目录
-    group_log.info("---------- 准备目标目录 ----------")
-    if os.path.exists(dst):
-        group_log.info(f"目标目录已存在，正在清空：{dst}")
-        shutil.rmtree(dst)
-        os.makedirs(dst)
-        group_log.info(f"目标目录已重建：{dst}")
-    else:
-        group_log.info(f"目标目录不存在，正在创建：{dst}")
-        os.makedirs(dst)
-
-    # 创建目标目录
-    for phase in ['train', 'valid', 'test']:
-        img_dir = os.path.join(dst, phase, 'images')
-        lbl_dir = os.path.join(dst, phase, 'labels')
-        os.makedirs(img_dir, exist_ok=True)
-        os.makedirs(lbl_dir, exist_ok=True)
-        group_log.info(f"已创建目录：{img_dir}")
-        group_log.info(f"已创建目录：{lbl_dir}")
-
-    # 复制文件到目标目录
-    group_log.info("---------- 开始复制文件 ----------")
-    phase_map = [('train', train_data), ('valid', valid_data), ('test', test_data)]
-    for phase, data in phase_map:
-        group_log.info(f"[{phase}] 开始复制，共 {len(data)} 条样本")
-        for img, label in data:
-            img_src = os.path.join(src_img, img)
-            label_src = os.path.join(src_lbl, label)
-            img_dst = os.path.join(dst, phase, 'images', img)
-            label_dst = os.path.join(dst, phase, 'labels', label)
-            shutil.copy2(img_src, img_dst)
-            shutil.copy2(label_src, label_dst)
-        group_log.info(f"[{phase}] 复制完成")
-
-    group_log.info("========== 数据集分割完成 ==========")
+    # 调用 split_dataset 函数（需要传包含 images/labels 的父目录）
+    split_dataset(export_dir, dst)
 
     # 自动生成 data.yaml（路径统一用正斜杠，跨平台兼容）
     yaml_path = os.path.join(_PROJ_ROOT, 'cfg', 'datasets', f'{dataset_name}.yaml')
@@ -169,8 +76,6 @@ names:
     os.makedirs(os.path.dirname(yaml_path), exist_ok=True)
     with open(yaml_path, 'w', encoding='utf-8') as f:
         f.write(content)
-
-    group_log.info(f"data.yaml 已生成：{yaml_path}")
 
     return True
 
