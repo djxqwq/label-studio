@@ -4,11 +4,7 @@ import sys
 import random
 import shutil
 
-# cv-ultralytics 路径：label-studio/cv-ultralytics/
-_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_CV_ULTRA = os.path.join(_BASE, 'cv-ultralytics')
-# ultralytics 包位于 cv-ultralytics/ultralytics/ultralytics/__init__.py
-# 需要把 cv-ultralytics/ultralytics/ 加入 sys.path 才能 import ultralytics
+_CV_ULTRA = os.environ.get('CV_ULTRA_PATH', '/label-studio/cv-ultralytics')
 _ULTRA_SRC = os.path.join(_CV_ULTRA, 'ultralytics')
 if _ULTRA_SRC not in sys.path:
     sys.path.insert(0, _ULTRA_SRC)
@@ -158,29 +154,29 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
 
     epochs = params.get('epochs', 1000)
 
-    # 指定权重目录，避免 ultralytics 下载到系统临时目录
     _models_dir = os.path.join(_PROJ_ROOT, 'models')
     os.makedirs(_models_dir, exist_ok=True)
     SETTINGS['weights_dir'] = _models_dir
 
-    # 加载模型架构和预训练权重
+    _log(job, f'权重目录: {_models_dir}')
+    _log(job, f'目录内容: {os.listdir(_models_dir) if os.path.exists(_models_dir) else "不存在"}')
+
     model_yaml_path = os.path.join(_PROJ_ROOT, 'cfg', 'models', 'v8', f'{model_yaml}.yaml')
     model_pt_path = os.path.join(_models_dir, f'{model_pt}.pt')
 
     _log(job, f'加载模型: {model_yaml} / {model_pt}')
+    _log(job, f'权重路径: {model_pt_path}')
+
     if os.path.exists(model_pt_path):
-        # 本地有预训练权重，用 yaml 架构 + 本地权重
         _log(job, f'使用本地权重: {model_pt_path}')
         model = YOLO(model_yaml_path).load(model_pt_path)
     else:
-        # 尝试通过镜像下载
         _log(job, f'本地权重不存在，尝试下载 {model_pt}.pt ...')
         try:
             downloaded = _download_model_weights(model_pt, _models_dir)
             _log(job, f'下载成功: {downloaded}')
             model = YOLO(model_yaml_path).load(downloaded)
         except RuntimeError:
-            # 下载失败，尝试让 YOLO 自带下载（作为兜底）
             _log(job, f'镜像下载失败，回退到 YOLO 自带下载 ...')
             model = YOLO(f'{model_pt}.pt')
 

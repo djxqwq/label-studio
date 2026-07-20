@@ -158,24 +158,38 @@ docker compose up --build
 
 ### 方式二：本地开发（不使用 Docker）
 
+> **注意**：本地开发要求 **Python 3.10+**、**Node 22+**、**GCC 9.3+**。CentOS 7 等老系统因 glibc/GCC 版本过低，无法本地运行，请使用 Docker 方案。
+
 #### 后端
 
 ```bash
 # 1. 安装 Poetry
 pip install poetry
 
-# 2. 安装项目依赖（包含 YOLO 训练依赖：torch、ultralytics 等）
+# 2. 安装项目基础依赖（不含训练依赖）
 poetry install
 
-# 3. 运行数据库迁移
+# 3. 安装 YOLO 训练依赖（torch/torchvision/ultralytics 已从 poetry 剥离，需单独安装）
+#    CUDA 版本（GPU 训练）：
+pip install torch torchvision --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu118
+pip install ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+#    CPU 版本（无 GPU 或仅推理）：
+# pip install torch torchvision ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 4. 运行数据库迁移（首次启动必须执行）
 DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
   poetry run python label_studio/manage.py migrate
 
-# 4. 收集静态文件
+# 5. 创建超级管理员（首次启动）
+DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
+  poetry run python label_studio/manage.py createsuperuser
+
+# 6. 收集静态文件
 DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
   poetry run python label_studio/manage.py collectstatic
 
-# 5. 启动开发服务器（SQLite 模式）
+# 7. 启动开发服务器（SQLite 模式）
 make run-dev
 ```
 
@@ -190,9 +204,11 @@ make shell-dev        # Django shell
 
 #### 前端
 
+> 前端需要 **Node 22+**（项目使用 Node 22 构建）。
+
 ```bash
 # 1. 安装前端依赖
-cd web && yarn install --frozen-lockfile
+cd web && yarn install
 
 # 2. 启动前端开发服务器（HMR 模式）
 cd web && yarn run dev
