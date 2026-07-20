@@ -16,6 +16,7 @@ from .serializers import TrainRequestSerializer, ModelConfigSerializer
 from .tasks import build_dataset, run_training
 
 logger = logging.getLogger(__name__)
+_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
 
 # ==================== 模型配置 CRUD ====================
@@ -102,8 +103,9 @@ class TrainStartAPI(APIView):
         )
 
         def _train():
+            data_name = config.data_yaml or config.name
+            dataset_dir = os.path.join(_BASE, 'cv-ultralytics', 'datasets', data_name, config.task_type)
             try:
-                data_name = config.data_yaml or config.name
                 build_dataset(export_dir, data_name, config.task_type, config.classes)
                 job.status = 'training'; job.save()
                 run_training(
@@ -121,10 +123,14 @@ class TrainStartAPI(APIView):
                 logger.exception(f'训练失败：{e}')
                 job.status = 'failed'; job.error_message = str(e); job.save()
             finally:
-                # 清理临时导出目录
+                # 清理临时导出目录（压缩包解压后的文件）
                 if os.path.exists(export_dir):
-                    logger.info(f'清理临时目录：{export_dir}')
+                    logger.info(f'清理临时导出目录：{export_dir}')
                     shutil.rmtree(export_dir, ignore_errors=True)
+                # 清理分割后的数据集目录
+                if os.path.exists(dataset_dir):
+                    logger.info(f'清理数据集目录：{dataset_dir}')
+                    shutil.rmtree(dataset_dir, ignore_errors=True)
 
         threading.Thread(target=_train, daemon=True).start()
         return Response({'job_id': job.id, 'status': 'building'}, status=status.HTTP_201_CREATED)
