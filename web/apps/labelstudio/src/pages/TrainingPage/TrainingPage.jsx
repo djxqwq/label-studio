@@ -21,9 +21,9 @@ const TrainingLayout = ({ children, ...routeProps }) => {
     <SidebarMenu
       menuItems={TABS.map((t) => ({
         title: t.label,
-        path: `/data/train/${t.key}`,
+        path: `/train/${t.key}`,
       }))}
-      path={`/projects/${params.id}/data/train`}
+      path={`/projects/${params.id}/train`}
       children={children}
     />
   );
@@ -76,7 +76,7 @@ const StartTrain = () => {
         params: { pk: pageParams.id },
         body: { config_name: configName, epochs, batch, patience, imgsz, device },
       });
-      history.push(`/projects/${pageParams.id}/data/train/progress`);
+      history.push(`/projects/${pageParams.id}/train/progress`);
     } catch (e) {
       setError(e?.response?.detail || e?.detail || "启动失败");
     } finally {
@@ -106,7 +106,7 @@ const StartTrain = () => {
               placeholder="-- 请选择 --"
               options={configOptions}
             />
-            <Button size="small" look="outlined" onClick={() => history.push(`/projects/${pageParams.id}/data/train/configs`)}>
+            <Button size="small" look="outlined" onClick={() => history.push(`/projects/${pageParams.id}/train/configs`)}>
               + 新建
             </Button>
           </Elem>
@@ -577,8 +577,11 @@ const ConfigManagement = () => {
 };
 
 export const TrainingPage = {
-  path: "/data/train",
-  component: TrainingLayout,
+  title: "训练",
+  path: "/train",
+  exact: true,
+  layout: TrainingLayout,
+  component: StartTrain,
   pages: {
     start: StartTrain,
     progress: TrainProgress,
@@ -586,5 +589,4 @@ export const TrainingPage = {
     models: ModelManagement,
     configs: ConfigManagement,
   },
-  title: "训练",
 };
