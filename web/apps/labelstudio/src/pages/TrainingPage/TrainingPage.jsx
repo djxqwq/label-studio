@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useHistory, useParams } from "react-router";
+import { useHistory } from "react-router";
 import { Button, Select } from "@humansignal/ui";
 import { Space } from "../../components/Space/Space";
 import { SidebarMenu } from "../../components/SidebarMenu/SidebarMenu";
 import { useAPI } from "../../providers/ApiProvider";
+import { useParams } from "../../providers/RoutesProvider";
 import { Block, Elem } from "../../utils/bem";
 import "./TrainingPage.scss";
 
@@ -16,14 +17,13 @@ const TABS = [
 ];
 
 const TrainingLayout = ({ children, ...routeProps }) => {
-  const params = useParams();
   return (
     <SidebarMenu
       menuItems={TABS.map((t) => ({
         title: t.label,
-        path: `/train/${t.key}`,
+        path: `/${t.key}`,
       }))}
-      path={`/projects/${params.id}/train`}
+      path={routeProps.match.url}
       children={children}
     />
   );
