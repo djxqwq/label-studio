@@ -41,15 +41,29 @@ _DEFAULT_CONFIGS = [
 ]
 
 
+_SEED_DONE = False
+_SEED_LOCK = threading.Lock()
+
+
 def _seed_defaults(request):
-    if not request.user.is_authenticated:
+    global _SEED_DONE
+    if _SEED_DONE:
         return
-    for name, task_type, yaml, pt, classes in _DEFAULT_CONFIGS:
-        ModelConfig.objects.update_or_create(
-            name=name,
-            defaults=dict(task_type=task_type, model_yaml=yaml, model_pt=pt,
-                          classes=classes, created_by=request.user),
-        )
+    with _SEED_LOCK:
+        if _SEED_DONE:
+            return
+        if not request.user.is_authenticated:
+            return
+        try:
+            for name, task_type, yaml, pt, classes in _DEFAULT_CONFIGS:
+                ModelConfig.objects.update_or_create(
+                    name=name,
+                    defaults=dict(task_type=task_type, model_yaml=yaml, model_pt=pt,
+                                  classes=classes, created_by=request.user),
+                )
+            _SEED_DONE = True
+        except Exception:
+            pass
 
 
 class ModelConfigListAPI(APIView):
