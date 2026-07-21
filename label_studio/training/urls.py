@@ -20,6 +20,8 @@ urlpatterns = [
             api.TrainJobStopAPI.as_view(), name='train-job-stop'),
     re_path(r'^api/train/jobs/(?P<job_id>\d+)/models/?$',
             api.TrainJobModelsAPI.as_view(), name='train-job-models'),
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/artifacts/(?P<key>[\w-]+)/?$',
+            api.TrainJobArtifactAPI.as_view(), name='train-job-artifact'),
     # 模型下载（删除请走删除整个任务）
     re_path(r'^api/train/models/(?P<mid>\d+)/download/?$',
             api.TrainModelDownloadAPI.as_view(), name='train-model-download'),

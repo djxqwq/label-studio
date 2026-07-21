@@ -240,6 +240,25 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
 
     _log(job, f'模型已保存：model_v{version}')
 
+    # 拷贝 Ultralytics 训练曲线图（F1_curve.png 等）到模型目录，供任务页展示
+    artifacts = {}
+    try:
+        trainer = getattr(model, 'trainer', None)
+        trainer_dir = getattr(trainer, 'save_dir', None) if trainer else None
+        if trainer_dir:
+            for plot_name in ('F1_curve.png', 'PR_curve.png', 'results.png'):
+                src = os.path.join(str(trainer_dir), plot_name)
+                if os.path.isfile(src):
+                    dest = os.path.join(save_dir, plot_name)
+                    shutil.copy2(src, dest)
+                    key = plot_name.rsplit('.', 1)[0]  # F1_curve
+                    artifacts[key] = dest
+                    _log(job, f'已保存训练曲线：{plot_name}')
+        if not artifacts.get('F1_curve'):
+            _log(job, '未找到 F1_curve.png（可能未生成评估曲线）', level='WARNING')
+    except Exception as e:
+        _log(job, f'保存训练曲线失败：{e}', level='WARNING')
+
     from .models import TrainedModel
     _close_db()
     TrainedModel.objects.create(
@@ -250,6 +269,7 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
         metrics=metrics,
     )
     job.result = metrics
-    job.save(update_fields=['result', 'updated_at'])
+    job.artifacts = artifacts
+    job.save(update_fields=['result', 'artifacts', 'updated_at'])
 
     return save_dir

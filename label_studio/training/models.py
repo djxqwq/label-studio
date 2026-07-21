@@ -1,4 +1,5 @@
 """训练任务数据库模型"""
+import os
 import uuid
 from django.db import models
 from django.contrib.auth import get_user_model
@@ -101,6 +102,7 @@ class TrainingJob(models.Model):
     total_epochs = models.IntegerField(default=0)
     params = models.JSONField(default=dict)
     result = models.JSONField(default=dict, null=True, blank=True)
+    artifacts = models.JSONField(default=dict, blank=True, help_text='训练产物路径，如 F1_curve')
     error_message = models.TextField(blank=True, default='')
     stop_requested = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -117,6 +119,18 @@ class TrainingJob(models.Model):
             return Project.objects.filter(pk=self.project_id)
         return Project.objects.none()
 
+    def _artifacts_payload(self):
+        """返回可访问的产物 URL（文件存在才返回）"""
+        out = {}
+        for key, path in (self.artifacts or {}).items():
+            if path and os.path.isfile(path):
+                out[key] = {
+                    'name': os.path.basename(path),
+                    'url': f'/api/train/jobs/{self.id}/artifacts/{key}',
+                    'exists': True,
+                }
+        return out
+
     def to_dict(self, detail=False):
         project_list = [{'id': p.id, 'title': p.title} for p in self.get_projects()]
         data = {
@@ -130,6 +144,7 @@ class TrainingJob(models.Model):
             'total_epochs': self.total_epochs,
             'params': self.params,
             'result': self.result,
+            'artifacts': self._artifacts_payload(),
             'error_message': self.error_message,
             'stop_requested': self.stop_requested,
             'projects': project_list,

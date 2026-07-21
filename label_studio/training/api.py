@@ -490,16 +490,33 @@ class TrainJobDetailAPI(APIView):
             return Response({'error': '任务仍在运行，请先停止再删除'}, status=400)
 
         removed_files = 0
+        parent_dirs = set()
         for m in job.models.all():
             if m.file_path and os.path.exists(m.file_path):
                 try:
                     os.remove(m.file_path)
                     removed_files += 1
                     parent = os.path.dirname(m.file_path)
-                    if parent and os.path.isdir(parent) and not os.listdir(parent):
-                        os.rmdir(parent)
+                    if parent:
+                        parent_dirs.add(parent)
                 except OSError:
                     logger.exception('删除模型文件失败: %s', m.file_path)
+        for path in (job.artifacts or {}).values():
+            if path and os.path.isfile(path):
+                try:
+                    os.remove(path)
+                    removed_files += 1
+                    parent = os.path.dirname(path)
+                    if parent:
+                        parent_dirs.add(parent)
+                except OSError:
+                    logger.exception('删除训练产物失败: %s', path)
+        for parent in parent_dirs:
+            try:
+                if os.path.isdir(parent) and not os.listdir(parent):
+                    os.rmdir(parent)
+            except OSError:
+                pass
         job_id_val = job.id
         job.delete()
         return Response({'ok': True, 'deleted_job_id': job_id_val, 'removed_files': removed_files})
@@ -589,3 +606,26 @@ class TrainModelDownloadAPI(APIView):
         if not m or not os.path.exists(m.file_path):
             return Response({'error': '模型文件不存在'}, status=404)
         return FileResponse(open(m.file_path, 'rb'), as_attachment=True, filename=m.name)
+
+
+class TrainJobArtifactAPI(APIView):
+    """GET /api/train/jobs/{job_id}/artifacts/{key} —— 查看 F1_curve 等训练曲线图"""
+    permission_required = all_permissions.projects_view
+
+    ALLOWED_KEYS = {'F1_curve', 'PR_curve', 'results'}
+
+    def get(self, request, job_id, key):
+        if key not in self.ALLOWED_KEYS:
+            return Response({'error': '不支持的产物类型'}, status=400)
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        job = qs.filter(id=job_id).first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+        path = (job.artifacts or {}).get(key)
+        if not path or not os.path.isfile(path):
+            return Response({'error': '产物文件不存在'}, status=404)
+        filename = os.path.basename(path)
+        return FileResponse(open(path, 'rb'), content_type='image/png', filename=filename)

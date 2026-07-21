@@ -166,7 +166,7 @@ ProjectsPage.context = ({ openModal, showButton }) => {
   return (
     <Space size="small">
       <Button look="outlined" size="small" aria-label="Open training" onClick={() => history.push("/projects/train")}>
-        训练
+        Train
       </Button>
       <Button onClick={openModal} size="small" aria-label="Create new project">
         Create

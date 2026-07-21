@@ -938,6 +938,16 @@ const TaskDetail = () => {
           </Elem>
         )}
 
+        {job.artifacts?.F1_curve?.url && (
+          <Elem name="section">
+            <Elem name="label">F1 Curve</Elem>
+            <Elem name="hint">训练结束后由 Ultralytics 生成的 F1 曲线，用于查看各类别 F1 与置信度阈值的关系。</Elem>
+            <Elem name="artifact-image">
+              <img src={job.artifacts.F1_curve.url} alt="F1 Curve" />
+            </Elem>
+          </Elem>
+        )}
+
         <Elem name="section">
           <Elem name="label">产出模型</Elem>
           {(job.models || []).length === 0 ? (
