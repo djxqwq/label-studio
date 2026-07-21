@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { useParams as useRouterParams } from "react-router";
+import { useHistory, useParams as useRouterParams } from "react-router";
 import { Redirect } from "react-router-dom";
 import { Button } from "@humansignal/ui";
 import { Oneof } from "../../components/Oneof/Oneof";
+import { Space } from "../../components/Space/Space";
 import { Spinner } from "../../components/Spinner/Spinner";
 import { ApiContext } from "../../providers/ApiProvider";
 import { useContextProps } from "../../providers/RoutesProvider";
@@ -143,6 +144,7 @@ ProjectsPage.title = "Projects";
 ProjectsPage.path = "/projects";
 ProjectsPage.exact = true;
 ProjectsPage.routes = ({ store }) => [
+  TrainingPage,
   {
     title: () => store.project?.title,
     path: "/:id(\\d+)",
@@ -155,15 +157,20 @@ ProjectsPage.routes = ({ store }) => [
     pages: {
       DataManagerPage,
       SettingsPage,
-      TrainingPage,
     },
   },
 ];
 ProjectsPage.context = ({ openModal, showButton }) => {
+  const history = useHistory();
   if (!showButton) return null;
   return (
-    <Button onClick={openModal} size="small" aria-label="Create new project">
-      Create
-    </Button>
+    <Space size="small">
+      <Button look="outlined" size="small" aria-label="Open training" onClick={() => history.push("/projects/train")}>
+        训练
+      </Button>
+      <Button onClick={openModal} size="small" aria-label="Create new project">
+        Create
+      </Button>
+    </Space>
   );
 };

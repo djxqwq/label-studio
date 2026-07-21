@@ -240,7 +240,6 @@ DataManagerPage.context = ({ dmRef }) => {
 
   const links = {
     "/settings": "Settings",
-    "/train": "训练",
   };
 
   const updateCrumbs = (currentMode) => {

@@ -19,5 +19,6 @@ def project_settings(request, pk, sub_path):
 
 
 @login_required
-def project_train(request, pk, sub_path=''):
+def project_train(request, sub_path=''):
+    """全局训练页 SPA 入口（/projects/train/...）"""
     return render(request, 'projects/list.html')

@@ -43,6 +43,7 @@ class ModelConfig(models.Model):
             'task_type': self.task_type,
             'model_yaml': self.model_yaml,
             'model_pt': self.model_pt,
+            'data_yaml': self.data_yaml,
             'classes': self.classes,
             'epochs': self.epochs,
             'batch': self.batch,
@@ -53,7 +54,7 @@ class ModelConfig(models.Model):
 
 
 class TrainingJob(models.Model):
-    """训练任务记录"""
+    """训练任务记录（支持单项目或多项目合并训练集）"""
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('building', 'Building Dataset'),
@@ -63,7 +64,12 @@ class TrainingJob(models.Model):
         ('stopped', 'Stopped'),
     ]
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='training_jobs')
+    # 旧单项目外键：保留兼容历史数据，新任务以 projects M2M 为准
+    project = models.ForeignKey(
+        Project, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='training_jobs',
+    )
+    projects = models.ManyToManyField(Project, related_name='training_jobs_multi', blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     config_name = models.CharField(max_length=255)
     task_id = models.CharField(max_length=64, unique=True, default=uuid.uuid4, editable=False)
@@ -74,15 +80,30 @@ class TrainingJob(models.Model):
     params = models.JSONField(default=dict)
     result = models.JSONField(default=dict, null=True, blank=True)
     error_message = models.TextField(blank=True, default='')
+    stop_requested = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-created_at']
 
-    def to_dict(self):
-        return {
+    def get_projects(self):
+        """返回关联项目 queryset（优先 M2M，回退旧 FK）"""
+        qs = self.projects.all()
+        if qs.exists():
+            return qs
+        if self.project_id:
+            return Project.objects.filter(pk=self.project_id)
+        return Project.objects.none()
+
+    def to_dict(self, detail=False):
+        project_list = [
+            {'id': p.id, 'title': p.title}
+            for p in self.get_projects()
+        ]
+        data = {
             'id': self.id,
+            'task_id': str(self.task_id),
             'config_name': self.config_name,
             'status': self.status,
             'progress': self.progress,
@@ -91,8 +112,20 @@ class TrainingJob(models.Model):
             'params': self.params,
             'result': self.result,
             'error_message': self.error_message,
+            'stop_requested': self.stop_requested,
+            'projects': project_list,
+            'project_ids': [p['id'] for p in project_list],
+            'project_titles': [p['title'] for p in project_list],
+            'created_by': self.created_by.get_username() if self.created_by else None,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
+            'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M'),
         }
+        if detail:
+            models = [m.to_dict() for m in self.models.all()]
+            data['models'] = models
+            data['model_count'] = len(models)
+            data['log_count'] = self.logs.count()
+        return data
 
 
 class TrainingLog(models.Model):
@@ -104,6 +137,14 @@ class TrainingLog(models.Model):
 
     class Meta:
         ordering = ['created_at']
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'level': self.level,
+            'message': self.message,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        }
 
 
 class TrainedModel(models.Model):
@@ -123,6 +164,8 @@ class TrainedModel(models.Model):
             'id': self.id,
             'name': self.name,
             'file_size': self.file_size,
+            'file_size_mb': round(self.file_size / (1024 * 1024), 2) if self.file_size else 0,
             'metrics': self.metrics,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
+            'job_id': self.job_id,
         }

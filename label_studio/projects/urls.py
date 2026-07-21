@@ -9,10 +9,10 @@ app_name = 'projects'
 # reverse for projects:name
 _urlpatterns = [
     path('', views.project_list, name='project-index'),
+    path('train/', views.project_train, name='projects-train', kwargs={'sub_path': ''}),
+    path('train/<path:sub_path>', views.project_train, name='projects-train-anything'),
     path('<int:pk>/settings/', views.project_settings, name='project-settings', kwargs={'sub_path': ''}),
     path('<int:pk>/settings/<sub_path>', views.project_settings, name='project-settings-anything'),
-    path('<int:pk>/train/', views.project_train, name='project-train', kwargs={'sub_path': ''}),
-    path('<int:pk>/train/<sub_path>', views.project_train, name='project-train-anything'),
 ]
 
 # reverse for projects:api:name

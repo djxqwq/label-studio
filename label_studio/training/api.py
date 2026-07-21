@@ -1,19 +1,29 @@
-"""训练管理 API"""
+"""训练管理 API（全局，支持多项目合并训练集）"""
+import io
 import logging
 import os
 import shutil
+import tempfile
 import threading
+import zipfile
 
+from django.conf import settings as django_settings
+from django.db import close_old_connections
+from django.http import FileResponse
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import all_permissions
+from core.utils.common import batch
+from data_export.models import DataExport
+from data_export.serializers import ExportDataSerializer
 from projects.models import Project
+from tasks.models import Task
 
-from .models import ModelConfig, TrainingJob, TrainingLog, TrainedModel
+from .models import ModelConfig, TrainingJob, TrainedModel
 from .serializers import TrainRequestSerializer, ModelConfigSerializer
-from .tasks import build_dataset, run_training
+from .tasks import TrainingStopped, build_dataset, run_training
 
 logger = logging.getLogger(__name__)
 _BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -40,7 +50,6 @@ _DEFAULT_CONFIGS = [
     ("diantou-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["diantou"]),
 ]
 
-
 _SEED_DONE = False
 _SEED_LOCK = threading.Lock()
 
@@ -58,12 +67,214 @@ def _seed_defaults(request):
             for name, task_type, yaml, pt, classes in _DEFAULT_CONFIGS:
                 ModelConfig.objects.update_or_create(
                     name=name,
-                    defaults=dict(task_type=task_type, model_yaml=yaml, model_pt=pt,
-                                  classes=classes, created_by=request.user),
+                    defaults=dict(
+                        task_type=task_type, model_yaml=yaml, model_pt=pt,
+                        classes=classes, created_by=request.user,
+                    ),
                 )
             _SEED_DONE = True
         except Exception:
-            pass
+            logger.exception('seed default model configs failed')
+
+
+def _project_label_names(project):
+    """从项目 labeling config 提取标签名集合"""
+    parsed = project.get_parsed_config() or {}
+    names = set()
+    for ctrl in parsed.values():
+        if not isinstance(ctrl, dict):
+            continue
+        for label in ctrl.get('labels') or []:
+            if isinstance(label, str):
+                names.add(label)
+            elif isinstance(label, dict) and 'value' in label:
+                names.add(str(label['value']))
+    return names
+
+
+def _validate_projects_classes(projects, config):
+    """类别必须与配置完全一致，不一致直接报错"""
+    expected = set(config.classes or [])
+    if not expected:
+        raise ValueError('模型配置未设置类别 classes')
+
+    for project in projects:
+        actual = _project_label_names(project)
+        if not actual:
+            raise ValueError(f'项目「{project.title}」(id={project.id}) 未配置标签类别')
+        if actual != expected:
+            raise ValueError(
+                f'项目「{project.title}」(id={project.id}) 类别与配置不一致：'
+                f'项目={sorted(actual)}，配置={sorted(expected)}'
+            )
+
+
+def _param_or_default(params, key, default):
+    value = params.get(key)
+    return default if value is None else value
+
+
+def _find_images_root(export_dir):
+    img = os.path.join(export_dir, 'images')
+    if os.path.isdir(img):
+        return export_dir
+    for item in os.listdir(export_dir):
+        p = os.path.join(export_dir, item)
+        if os.path.isdir(p) and os.path.isdir(os.path.join(p, 'images')):
+            return p
+    return None
+
+
+def _export_one_project(request, project, config, tmp_root):
+    """导出单个项目为 YOLO zip 并解压到独立目录，返回含 images/labels 的根目录"""
+    tasks = []
+    task_qs = Task.objects.filter(project=project, annotations__isnull=False).distinct()
+    for _ids in batch(task_qs.values_list('id', flat=True), 1000):
+        tasks += ExportDataSerializer(
+            Task.objects.filter(id__in=_ids)
+            .select_related('project')
+            .prefetch_related('annotations', 'predictions'),
+            many=True,
+            expand=['drafts'],
+        ).data
+
+    if not tasks:
+        raise ValueError(f'项目「{project.title}」(id={project.id}) 没有标注数据')
+
+    saved_tmp = os.environ.get('TMP'), os.environ.get('TEMP'), os.environ.get('TMPDIR')
+    os.environ['TMP'] = os.environ['TEMP'] = os.environ['TMPDIR'] = tmp_root
+    try:
+        export_format = 'YOLO_OBB_WITH_IMAGES' if config.task_type == 'obb' else 'YOLO_WITH_IMAGES'
+        export_file, _, _ = DataExport.generate_export_file(
+            project, tasks, export_format, download_resources=True,
+            get_args=request.GET, hostname=request.build_absolute_uri('/'),
+        )
+    finally:
+        for key, val in zip(('TMP', 'TEMP', 'TMPDIR'), saved_tmp):
+            if val is not None:
+                os.environ[key] = val
+            else:
+                os.environ.pop(key, None)
+
+    if hasattr(export_file, 'read'):
+        data = export_file.read()
+        export_file.close()
+    elif isinstance(export_file, str) and os.path.isfile(export_file):
+        with open(export_file, 'rb') as f:
+            data = f.read()
+    else:
+        raise RuntimeError(f'项目「{project.title}」导出文件无法读取')
+
+    project_dir = tempfile.mkdtemp(dir=tmp_root, prefix=f'proj_{project.id}_')
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        zf.extractall(project_dir)
+
+    root = _find_images_root(project_dir)
+    if not root:
+        raise RuntimeError(f'项目「{project.title}」导出结构不完整（缺少 images）')
+    return root
+
+
+def _merge_export_dirs(source_roots, merge_dir):
+    """合并多项目导出，文件名加项目前缀避免冲突"""
+    img_dst = os.path.join(merge_dir, 'images')
+    lbl_dst = os.path.join(merge_dir, 'labels')
+    os.makedirs(img_dst, exist_ok=True)
+    os.makedirs(lbl_dst, exist_ok=True)
+
+    total = 0
+    for idx, root in enumerate(source_roots):
+        src_img = os.path.join(root, 'images')
+        src_lbl = os.path.join(root, 'labels')
+        if not os.path.isdir(src_img):
+            continue
+        for name in os.listdir(src_img):
+            src = os.path.join(src_img, name)
+            if not os.path.isfile(src):
+                continue
+            base, ext = os.path.splitext(name)
+            new_name = f'p{idx}_{base}{ext}'
+            shutil.copy2(src, os.path.join(img_dst, new_name))
+            lbl_name = f'{base}.txt'
+            lbl_src = os.path.join(src_lbl, lbl_name) if os.path.isdir(src_lbl) else None
+            if lbl_src and os.path.isfile(lbl_src):
+                shutil.copy2(lbl_src, os.path.join(lbl_dst, f'p{idx}_{base}.txt'))
+            total += 1
+    if total == 0:
+        raise ValueError('合并后没有可用图片')
+    return total
+
+
+def _do_multi_project_export(request, projects, config):
+    tmp_root = os.path.join(django_settings.BASE_DATA_DIR, 'tmp')
+    os.makedirs(tmp_root, exist_ok=True)
+    work_dir = tempfile.mkdtemp(dir=tmp_root, prefix='ls_train_multi_')
+    source_roots = []
+    try:
+        for project in projects:
+            source_roots.append(_export_one_project(request, project, config, tmp_root))
+        merge_dir = os.path.join(work_dir, 'merged')
+        count = _merge_export_dirs(source_roots, merge_dir)
+        logger.info('multi export merged %s images from %s projects into %s', count, len(projects), merge_dir)
+        return merge_dir, work_dir
+    except Exception:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
+
+
+def _start_train_thread(job, config, params, export_dir, cleanup_dir):
+    def _train():
+        close_old_connections()
+        data_name = config.data_yaml or config.name
+        dataset_dir = os.path.join(_BASE, 'cv-ultralytics', 'datasets', data_name, config.task_type)
+        try:
+            job.refresh_from_db()
+            if job.stop_requested:
+                job.status = 'stopped'
+                job.save(update_fields=['status', 'updated_at'])
+                return
+
+            build_dataset(export_dir, data_name, config.task_type, config.classes)
+            job.status = 'training'
+            job.save(update_fields=['status', 'updated_at'])
+
+            run_training(
+                job=job,
+                model_yaml=config.model_yaml,
+                model_pt=config.model_pt,
+                data_yaml=data_name,
+                epochs=_param_or_default(params, 'epochs', config.epochs),
+                batch=_param_or_default(params, 'batch', config.batch),
+                patience=_param_or_default(params, 'patience', config.patience),
+                imgsz=_param_or_default(params, 'imgsz', config.imgsz),
+                device=_param_or_default(params, 'device', config.device),
+            )
+
+            job.refresh_from_db()
+            if job.stop_requested:
+                job.status = 'stopped'
+            else:
+                job.status = 'completed'
+                job.progress = 100
+            job.save(update_fields=['status', 'progress', 'updated_at'])
+        except TrainingStopped as e:
+            logger.info('training stopped: %s', e)
+            job.status = 'stopped'
+            job.error_message = str(e)
+            job.save(update_fields=['status', 'error_message', 'updated_at'])
+        except Exception as e:
+            logger.exception('训练失败：%s', e)
+            job.status = 'failed'
+            job.error_message = str(e)
+            job.save(update_fields=['status', 'error_message', 'updated_at'])
+        finally:
+            close_old_connections()
+            if cleanup_dir and os.path.exists(cleanup_dir):
+                shutil.rmtree(cleanup_dir, ignore_errors=True)
+            if os.path.exists(dataset_dir):
+                shutil.rmtree(dataset_dir, ignore_errors=True)
+
+    threading.Thread(target=_train, daemon=True).start()
 
 
 class ModelConfigListAPI(APIView):
@@ -102,210 +313,169 @@ class ModelConfigDetailAPI(APIView):
         return Response({'ok': True})
 
 
-# ==================== 训练 ====================
-
 class TrainStartAPI(APIView):
-    """POST /api/projects/{pk}/train -- 启动训练"""
+    """POST /api/train — 启动训练（可多项目）"""
     permission_required = all_permissions.projects_change
 
-    def post(self, request, pk):
+    def post(self, request):
         serializer = TrainRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        config_name = serializer.validated_data['config_name']
+        data = serializer.validated_data
+        config_name = data['config_name']
+        project_ids = list(dict.fromkeys(data['project_ids']))
 
         config = ModelConfig.objects.filter(name=config_name).first()
         if not config:
             return Response({'error': f'未知模型: {config_name}'}, status=400)
 
-        export_dir = self._do_yolo_export(request, pk, config)
-        params = serializer.validated_data
-        project = Project.objects.get(pk=pk)
+        projects = list(Project.objects.filter(id__in=project_ids))
+        found_ids = {p.id for p in projects}
+        missing = [pid for pid in project_ids if pid not in found_ids]
+        if missing:
+            return Response({'error': f'项目不存在: {missing}'}, status=400)
+
+        # 保持请求顺序
+        projects = sorted(projects, key=lambda p: project_ids.index(p.id))
+
+        try:
+            _validate_projects_classes(projects, config)
+            export_dir, cleanup_dir = _do_multi_project_export(request, projects, config)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        except Exception as e:
+            logger.exception('导出失败')
+            return Response({'error': f'导出失败: {e}'}, status=500)
+
+        params = {
+            k: data[k] for k in ('epochs', 'batch', 'patience', 'imgsz', 'device')
+            if k in data
+        }
+        params['project_ids'] = project_ids
 
         job = TrainingJob.objects.create(
-            project=project, created_by=request.user,
-            config_name=config_name, status='building',
+            project=projects[0],
+            created_by=request.user,
+            config_name=config_name,
+            status='building',
             params=params,
+            total_epochs=_param_or_default(params, 'epochs', config.epochs),
         )
+        job.projects.set(projects)
 
-        def _train():
-            data_name = config.data_yaml or config.name
-            dataset_dir = os.path.join(_BASE, 'cv-ultralytics', 'datasets', data_name, config.task_type)
-            try:
-                build_dataset(export_dir, data_name, config.task_type, config.classes)
-                job.status = 'training'; job.save()
-                run_training(
-                    job=job,
-                    model_yaml=config.model_yaml, model_pt=config.model_pt,
-                    data_yaml=data_name,
-                    epochs=params.get('epochs') or config.epochs,
-                    batch=params.get('batch') or config.batch,
-                    patience=params.get('patience') or config.patience,
-                    imgsz=params.get('imgsz') or config.imgsz,
-                    device=params.get('device') or config.device,
-                )
-                job.status = 'completed'; job.progress = 100; job.save()
-            except Exception as e:
-                logger.exception(f'训练失败：{e}')
-                job.status = 'failed'; job.error_message = str(e); job.save()
-            finally:
-                # 清理临时导出目录（压缩包解压后的文件）
-                if os.path.exists(export_dir):
-                    logger.info(f'清理临时导出目录：{export_dir}')
-                    shutil.rmtree(export_dir, ignore_errors=True)
-                # 清理分割后的数据集目录
-                if os.path.exists(dataset_dir):
-                    logger.info(f'清理数据集目录：{dataset_dir}')
-                    shutil.rmtree(dataset_dir, ignore_errors=True)
-
-        threading.Thread(target=_train, daemon=True).start()
-        return Response({'job_id': job.id, 'status': 'building'}, status=status.HTTP_201_CREATED)
-
-    def _do_yolo_export(self, request, pk, config):
-        import io, tempfile, zipfile
-        from data_export.models import DataExport
-        from data_export.serializers import ExportDataSerializer
-        from tasks.models import Task
-        from core.utils.common import batch
-        from django.conf import settings as django_settings
-
-        project = Project.objects.get(pk=pk)
-        tasks = []
-        task_qs = Task.objects.filter(project=project, annotations__isnull=False).distinct()
-        for _ids in batch(task_qs.values_list('id', flat=True), 1000):
-            tasks += ExportDataSerializer(
-                Task.objects.filter(id__in=_ids).select_related('project').prefetch_related('annotations', 'predictions'),
-                many=True, expand=['drafts'],
-            ).data
-
-        if not tasks:
-            raise ValueError('没有标注数据')
-
-        # 确保临时目录和图片文件在同一盘符，避免 Windows 跨盘符 os.path.relpath() 报错
-        _saved_tmp = os.environ.get('TMP'), os.environ.get('TEMP'), os.environ.get('TMPDIR')
-        _tmp_on_data = os.path.join(django_settings.BASE_DATA_DIR, 'tmp')
-        os.makedirs(_tmp_on_data, exist_ok=True)
-        os.environ['TMP'] = os.environ['TEMP'] = os.environ['TMPDIR'] = _tmp_on_data
-        try:
-            # 根据任务类型选择导出格式：obb 用 YOLO_OBB_WITH_IMAGES，其他用 YOLO_WITH_IMAGES
-            export_format = 'YOLO_OBB_WITH_IMAGES' if config.task_type == 'obb' else 'YOLO_WITH_IMAGES'
-            export_file, _, _ = DataExport.generate_export_file(
-                project, tasks, export_format, download_resources=True,
-                get_args=request.GET, hostname=request.build_absolute_uri('/'),
-            )
-        finally:
-            for key, val in zip(('TMP', 'TEMP', 'TMPDIR'), _saved_tmp):
-                if val is not None:
-                    os.environ[key] = val
-                else:
-                    os.environ.pop(key, None)
-
-        export_dir = tempfile.mkdtemp(dir=_tmp_on_data, prefix=f'ls_train_{pk}_')
-        logger.info(f'_do_yolo_export: export_dir={export_dir}')
-        logger.info(f'_do_yolo_export: 找到 {len(tasks)} 个标注任务')
-
-        if hasattr(export_file, 'read'):
-            data = export_file.read(); export_file.close()
-        elif isinstance(export_file, str) and os.path.isfile(export_file):
-            with open(export_file, 'rb') as f:
-                data = f.read()
-        else:
-            raise RuntimeError(f'无法读取导出文件')
-
-        logger.info(f'_do_yolo_export: 导出数据大小={len(data)} bytes')
-
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            zf.extractall(export_dir)
-            logger.info(f'_do_yolo_export: zip 内容={zf.namelist()[:20]}')
-
-        logger.info(f'_do_yolo_export: 解压后目录结构={os.listdir(export_dir)}')
-
-        img = os.path.join(export_dir, 'images')
-        if not os.path.isdir(img):
-            for item in os.listdir(export_dir):
-                p = os.path.join(export_dir, item)
-                if os.path.isdir(p) and os.path.isdir(os.path.join(p, 'images')):
-                    img = os.path.join(p, 'images'); break
-
-        if not os.path.isdir(img):
-            raise RuntimeError('导出结构不完整')
-
-        img_count = len(os.listdir(img))
-        logger.info(f'_do_yolo_export: 导出图片数={img_count}')
-        return export_dir
+        _start_train_thread(job, config, params, export_dir, cleanup_dir)
+        return Response(job.to_dict(detail=True), status=status.HTTP_201_CREATED)
 
 
-class TrainStatusAPI(APIView):
-    """GET /api/projects/{pk}/train/status"""
+class TrainJobListAPI(APIView):
+    """GET /api/train/jobs — 全站任务列表（所有人可见）"""
     permission_required = all_permissions.projects_view
 
-    def get(self, request, pk):
-        job = TrainingJob.objects.filter(project_id=pk).order_by('-created_at').first()
+    def get(self, request):
+        qs = TrainingJob.objects.all().prefetch_related('projects', 'models').select_related('created_by')
+        status_filter = request.GET.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        page = max(int(request.GET.get('page', 1)), 1)
+        page_size = min(max(int(request.GET.get('page_size', 20)), 1), 100)
+        total = qs.count()
+        start = (page - 1) * page_size
+        jobs = qs[start:start + page_size]
+        return Response({
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'results': [j.to_dict(detail=True) for j in jobs],
+        })
+
+
+class TrainJobDetailAPI(APIView):
+    """GET /api/train/jobs/{job_id}"""
+    permission_required = all_permissions.projects_view
+
+    def get(self, request, job_id):
+        job = (
+            TrainingJob.objects.filter(id=job_id)
+            .prefetch_related('projects', 'models')
+            .select_related('created_by')
+            .first()
+        )
         if not job:
-            return Response({'status': 'none'})
+            return Response({'error': '任务不存在'}, status=404)
+        return Response(job.to_dict(detail=True))
+
+
+class TrainJobLogsAPI(APIView):
+    """GET/DELETE /api/train/jobs/{job_id}/logs"""
+    permission_required = all_permissions.projects_view
+
+    def get(self, request, job_id):
+        job = TrainingJob.objects.filter(id=job_id).first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+        since = int(request.GET.get('since', 0))
+        entries = [
+            {
+                'id': log.id,
+                'level': log.level,
+                'message': log.message,
+                'created_at': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            for log in job.logs.filter(id__gt=since)
+        ]
+        return Response({'logs': entries, 'job_id': job.id, 'status': job.status})
+
+    def delete(self, request, job_id):
+        job = TrainingJob.objects.filter(id=job_id).first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+        job.logs.all().delete()
+        return Response({'ok': True})
+
+
+class TrainJobStopAPI(APIView):
+    """POST /api/train/jobs/{job_id}/stop"""
+    permission_required = all_permissions.projects_change
+
+    def post(self, request, job_id):
+        job = TrainingJob.objects.filter(id=job_id).first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+        if job.status not in ('pending', 'building', 'training'):
+            return Response({'error': f'任务状态为 {job.status}，无法停止'}, status=400)
+        job.stop_requested = True
+        job.status = 'stopped'
+        job.save(update_fields=['stop_requested', 'status', 'updated_at'])
         return Response(job.to_dict())
 
 
-class TrainLogsAPI(APIView):
-    """GET/DELETE /api/projects/{pk}/train/logs"""
+class TrainJobModelsAPI(APIView):
+    """GET /api/train/jobs/{job_id}/models"""
     permission_required = all_permissions.projects_view
 
-    def get(self, request, pk):
-        job = TrainingJob.objects.filter(project_id=pk).order_by('-created_at').first()
+    def get(self, request, job_id):
+        job = TrainingJob.objects.filter(id=job_id).first()
         if not job:
-            return Response({'logs': []})
-        since = int(request.GET.get('since', 0))
-        entries = job.logs.filter(id__gt=since).values('id', 'level', 'message', 'created_at')
-        return Response({'logs': list(entries)})
-
-    def delete(self, request, pk):
-        """清空训练日志"""
-        job = TrainingJob.objects.filter(project_id=pk).order_by('-created_at').first()
-        if job:
-            job.logs.all().delete()
-        return Response({'ok': True})
+            return Response({'error': '任务不存在'}, status=404)
+        return Response([m.to_dict() for m in job.models.all()])
 
 
-class TrainStopAPI(APIView):
-    """POST /api/projects/{pk}/train/stop"""
-    permission_required = all_permissions.projects_change
-
-    def post(self, request, pk):
-        job = TrainingJob.objects.filter(project_id=pk, status__in=['pending','building','training']).first()
-        if not job:
-            return Response({'error': '无运行中的训练任务'}, status=400)
-        job.status = 'stopped'; job.save()
-        return Response({'ok': True})
-
-
-# ==================== 模型管理 ====================
-
-class ModelListAPI(APIView):
-    """GET /api/projects/{pk}/train/models"""
+class TrainModelDownloadAPI(APIView):
+    """GET /api/train/models/{mid}/download"""
     permission_required = all_permissions.projects_view
 
-    def get(self, request, pk):
-        models = TrainedModel.objects.filter(job__project_id=pk).order_by('-created_at')
-        return Response([m.to_dict() for m in models])
-
-
-class ModelDownloadAPI(APIView):
-    """GET /api/projects/{pk}/train/models/{mid}/download"""
-    permission_required = all_permissions.projects_view
-
-    def get(self, request, pk, mid):
-        m = TrainedModel.objects.filter(id=mid, job__project_id=pk).first()
+    def get(self, request, mid):
+        m = TrainedModel.objects.filter(id=mid).first()
         if not m or not os.path.exists(m.file_path):
             return Response({'error': '模型文件不存在'}, status=404)
-        from django.http import FileResponse
         return FileResponse(open(m.file_path, 'rb'), as_attachment=True, filename=m.name)
 
 
-class ModelDeleteAPI(APIView):
-    """DELETE /api/projects/{pk}/train/models/{mid}"""
+class TrainModelDeleteAPI(APIView):
+    """DELETE /api/train/models/{mid}"""
     permission_required = all_permissions.projects_change
 
-    def delete(self, request, pk, mid):
-        m = TrainedModel.objects.filter(id=mid, job__project_id=pk).first()
+    def delete(self, request, mid):
+        m = TrainedModel.objects.filter(id=mid).first()
         if not m:
             return Response({'error': '模型不存在'}, status=404)
         if os.path.exists(m.file_path):

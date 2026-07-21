@@ -73,19 +73,20 @@ export const API_CONFIG = {
     modelVersions: "/ml/:pk/versions",
     mlInteractive: "POST:/ml/:pk/interactive-annotating",
 
-    // Training
+    // Training (global, multi-project)
     trainConfigs: "GET:/train/configs",
     createTrainConfig: "POST:/train/configs",
     updateTrainConfig: "PUT:/train/configs/:config_id",
     deleteTrainConfig: "DELETE:/train/configs/:config_id",
-    clearTrainLogs: "DELETE:/projects/:pk/train/logs",
-    startTrain: "POST:/projects/:pk/train",
-    trainStatus: "GET:/projects/:pk/train/status",
-    trainLogs: "GET:/projects/:pk/train/logs",
-    stopTrain: "POST:/projects/:pk/train/stop",
-    trainModels: "GET:/projects/:pk/train/models",
-    downloadModel: "GET:/projects/:pk/train/models/:mid/download",
-    deleteModel: "DELETE:/projects/:pk/train/models/:mid",
+    startTrain: "POST:/train",
+    trainJobs: "GET:/train/jobs",
+    trainJobDetail: "GET:/train/jobs/:job_id",
+    trainJobLogs: "GET:/train/jobs/:job_id/logs",
+    clearTrainJobLogs: "DELETE:/train/jobs/:job_id/logs",
+    stopTrainJob: "POST:/train/jobs/:job_id/stop",
+    trainJobModels: "GET:/train/jobs/:job_id/models",
+    downloadModel: "GET:/train/models/:mid/download",
+    deleteModel: "DELETE:/train/models/:mid",
 
     // Export
     export: "/projects/:pk/export",

@@ -1,32 +1,28 @@
-from django.conf.urls import include
 from django.urls import path, re_path
 from . import api
 
 app_name = 'training'
 
-_project_urlpatterns = [
-    # 训练操作
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/?$',
-            api.TrainStartAPI.as_view(), name='train-start'),
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/status/?$',
-            api.TrainStatusAPI.as_view(), name='train-status'),
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/logs/?$',
-            api.TrainLogsAPI.as_view(), name='train-logs'),
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/stop/?$',
-            api.TrainStopAPI.as_view(), name='train-stop'),
-    # 模型管理
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/models/?$',
-            api.ModelListAPI.as_view(), name='train-models'),
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/models/(?P<mid>\d+)/download/?$',
-            api.ModelDownloadAPI.as_view(), name='train-model-download'),
-    re_path(r'^api/projects/(?P<pk>[^/]+)/train/models/(?P<mid>\d+)/?$',
-            api.ModelDeleteAPI.as_view(), name='train-model-delete'),
-]
-
-_train_urlpatterns = [
+urlpatterns = [
+    # 配置
     path('api/train/configs', api.ModelConfigListAPI.as_view(), name='train-configs'),
     re_path(r'^api/train/configs/(?P<config_id>\d+)/?$',
             api.ModelConfigDetailAPI.as_view(), name='train-config-detail'),
+    # 启动训练
+    path('api/train', api.TrainStartAPI.as_view(), name='train-start'),
+    # 任务
+    path('api/train/jobs', api.TrainJobListAPI.as_view(), name='train-jobs'),
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/?$',
+            api.TrainJobDetailAPI.as_view(), name='train-job-detail'),
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/logs/?$',
+            api.TrainJobLogsAPI.as_view(), name='train-job-logs'),
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/stop/?$',
+            api.TrainJobStopAPI.as_view(), name='train-job-stop'),
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/models/?$',
+            api.TrainJobModelsAPI.as_view(), name='train-job-models'),
+    # 模型文件
+    re_path(r'^api/train/models/(?P<mid>\d+)/download/?$',
+            api.TrainModelDownloadAPI.as_view(), name='train-model-download'),
+    re_path(r'^api/train/models/(?P<mid>\d+)/?$',
+            api.TrainModelDeleteAPI.as_view(), name='train-model-delete'),
 ]
-
-urlpatterns = _project_urlpatterns + _train_urlpatterns
