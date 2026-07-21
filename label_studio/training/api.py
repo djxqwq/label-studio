@@ -243,11 +243,7 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                 model_yaml=config.model_yaml,
                 model_pt=config.model_pt,
                 data_yaml=data_name,
-                epochs=_param_or_default(params, 'epochs', config.epochs),
-                batch=_param_or_default(params, 'batch', config.batch),
-                patience=_param_or_default(params, 'patience', config.patience),
-                imgsz=_param_or_default(params, 'imgsz', config.imgsz),
-                device=_param_or_default(params, 'device', config.device),
+                **params,
             )
 
             job.refresh_from_db()
@@ -287,7 +283,8 @@ class ModelConfigListAPI(APIView):
     def post(self, request):
         serializer = ModelConfigSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        config = ModelConfig.objects.create(created_by=request.user, **serializer.validated_data)
+        fields = serializer.to_model_fields()
+        config = ModelConfig.objects.create(created_by=request.user, **fields)
         return Response(config.to_dict(), status=status.HTTP_201_CREATED)
 
 
@@ -300,7 +297,8 @@ class ModelConfigDetailAPI(APIView):
             return Response({'error': '配置不存在'}, status=404)
         serializer = ModelConfigSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        for key, value in serializer.validated_data.items():
+        fields = serializer.to_model_fields(existing=config.to_dict())
+        for key, value in fields.items():
             setattr(config, key, value)
         config.save()
         return Response(config.to_dict())
@@ -346,10 +344,11 @@ class TrainStartAPI(APIView):
             logger.exception('导出失败')
             return Response({'error': f'导出失败: {e}'}, status=500)
 
-        params = {
-            k: data[k] for k in ('epochs', 'batch', 'patience', 'imgsz', 'device')
-            if k in data
-        }
+        from .params import extract_train_params_from_config, merge_train_params
+        params = merge_train_params(
+            extract_train_params_from_config(config),
+            serializer.validated_train_params(),
+        )
         params['project_ids'] = project_ids
 
         job = TrainingJob.objects.create(
@@ -358,7 +357,7 @@ class TrainStartAPI(APIView):
             config_name=config_name,
             status='building',
             params=params,
-            total_epochs=_param_or_default(params, 'epochs', config.epochs),
+            total_epochs=int(params.get('epochs') or config.epochs or 0),
         )
         job.projects.set(projects)
 
@@ -371,10 +370,20 @@ class TrainJobListAPI(APIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request):
+        from django.db.models import Q
+
         qs = TrainingJob.objects.all().prefetch_related('projects', 'models').select_related('created_by')
         status_filter = request.GET.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+
+        project_q = (request.GET.get('project') or request.GET.get('q') or '').strip()
+        if project_q:
+            q_filter = Q(projects__title__icontains=project_q) | Q(project__title__icontains=project_q)
+            if project_q.isdigit():
+                q_filter |= Q(projects__id=int(project_q)) | Q(project_id=int(project_q))
+            qs = qs.filter(q_filter).distinct()
+
         page = max(int(request.GET.get('page', 1)), 1)
         page_size = min(max(int(request.GET.get('page_size', 20)), 1), 100)
         total = qs.count()

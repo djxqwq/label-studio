@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHistory, useParams as useRouterParams } from "react-router";
 import { Button, Select } from "@humansignal/ui";
-import { Modal } from "../../components/Modal/ModalPopup";
 import { Space } from "../../components/Space/Space";
 import { Spinner } from "../../components/Spinner/Spinner";
 import { SidebarMenu } from "../../components/SidebarMenu/SidebarMenu";
@@ -10,7 +9,6 @@ import { Block, Elem } from "../../utils/bem";
 import "./TrainingPage.scss";
 
 const STATUS_LABEL = {
-  none: "无任务",
   pending: "等待中",
   building: "构建数据集",
   training: "训练中",
@@ -28,11 +26,144 @@ const formatSize = (bytes) => {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 };
 
+const DEFAULT_TRAIN_PARAMS = {
+  epochs: 1000,
+  patience: 200,
+  batch: 16,
+  imgsz: 640,
+  device: "0",
+  workers: 8,
+  seed: 0,
+  pretrained: true,
+  optimizer: "auto",
+  cos_lr: false,
+  amp: true,
+  close_mosaic: 10,
+  fraction: 1.0,
+  deterministic: true,
+  single_cls: false,
+  rect: false,
+  multi_scale: false,
+  save_period: -1,
+  cache: false,
+  plots: true,
+  val: true,
+  lr0: 0.01,
+  lrf: 0.01,
+  momentum: 0.937,
+  weight_decay: 0.0005,
+  warmup_epochs: 3.0,
+  warmup_momentum: 0.8,
+  warmup_bias_lr: 0.1,
+  box: 7.5,
+  cls: 0.5,
+  dfl: 1.5,
+  label_smoothing: 0.0,
+  nbs: 64,
+  dropout: 0.0,
+  hsv_h: 0.015,
+  hsv_s: 0.7,
+  hsv_v: 0.4,
+  degrees: 0.0,
+  translate: 0.1,
+  scale: 0.5,
+  shear: 0.0,
+  perspective: 0.0,
+  flipud: 0.0,
+  fliplr: 0.5,
+  bgr: 0.0,
+  mosaic: 1.0,
+  mixup: 0.0,
+  copy_paste: 0.0,
+  erasing: 0.4,
+  crop_fraction: 1.0,
+  overlap_mask: true,
+  mask_ratio: 4,
+};
+
+const PARAM_GROUPS = [
+  {
+    title: "基础训练参数",
+    fields: [
+      { key: "epochs", label: "epochs 训练轮数", type: "number" },
+      { key: "patience", label: "patience 早停耐心值", type: "number" },
+      { key: "batch", label: "batch 批大小", type: "number" },
+      { key: "imgsz", label: "imgsz 输入尺寸", type: "number" },
+      { key: "device", label: "device 设备(0/cpu/0,1)", type: "text" },
+      { key: "workers", label: "workers 数据加载线程", type: "number" },
+      { key: "seed", label: "seed 随机种子", type: "number" },
+      { key: "optimizer", label: "optimizer 优化器", type: "select", options: ["auto", "SGD", "Adam", "AdamW", "RMSProp", "NAdam", "RAdam", "Adamax"] },
+      { key: "pretrained", label: "pretrained 使用预训练", type: "bool" },
+      { key: "amp", label: "amp 混合精度", type: "bool" },
+      { key: "cos_lr", label: "cos_lr 余弦学习率", type: "bool" },
+      { key: "close_mosaic", label: "close_mosaic 末轮关闭马赛克", type: "number" },
+      { key: "fraction", label: "fraction 数据使用比例", type: "number", step: 0.01 },
+      { key: "save_period", label: "save_period 存档间隔(-1关闭)", type: "number" },
+      { key: "cache", label: "cache 缓存数据", type: "bool" },
+      { key: "plots", label: "plots 保存图表", type: "bool" },
+      { key: "val", label: "val 训练中验证", type: "bool" },
+      { key: "deterministic", label: "deterministic 确定性", type: "bool" },
+      { key: "single_cls", label: "single_cls 单类模式", type: "bool" },
+      { key: "rect", label: "rect 矩形训练", type: "bool" },
+      { key: "multi_scale", label: "multi_scale 多尺度", type: "bool" },
+    ],
+  },
+  {
+    title: "学习率与损失",
+    fields: [
+      { key: "lr0", label: "lr0 初始学习率", type: "number", step: 0.0001 },
+      { key: "lrf", label: "lrf 最终学习率因子", type: "number", step: 0.0001 },
+      { key: "momentum", label: "momentum 动量", type: "number", step: 0.001 },
+      { key: "weight_decay", label: "weight_decay 权重衰减", type: "number", step: 0.0001 },
+      { key: "warmup_epochs", label: "warmup_epochs 预热轮数", type: "number", step: 0.1 },
+      { key: "warmup_momentum", label: "warmup_momentum 预热动量", type: "number", step: 0.01 },
+      { key: "warmup_bias_lr", label: "warmup_bias_lr 预热偏置学习率", type: "number", step: 0.01 },
+      { key: "box", label: "box 框损失权重", type: "number", step: 0.1 },
+      { key: "cls", label: "cls 分类损失权重", type: "number", step: 0.1 },
+      { key: "dfl", label: "dfl DFL损失权重", type: "number", step: 0.1 },
+      { key: "label_smoothing", label: "label_smoothing 标签平滑", type: "number", step: 0.01 },
+      { key: "nbs", label: "nbs 名义批大小", type: "number" },
+      { key: "dropout", label: "dropout 分类丢弃率", type: "number", step: 0.01 },
+    ],
+  },
+  {
+    title: "数据增强",
+    fields: [
+      { key: "hsv_h", label: "hsv_h 色调增强", type: "number", step: 0.001 },
+      { key: "hsv_s", label: "hsv_s 饱和度增强", type: "number", step: 0.01 },
+      { key: "hsv_v", label: "hsv_v 明度增强", type: "number", step: 0.01 },
+      { key: "degrees", label: "degrees 旋转角度", type: "number", step: 0.1 },
+      { key: "translate", label: "translate 平移", type: "number", step: 0.01 },
+      { key: "scale", label: "scale 缩放", type: "number", step: 0.01 },
+      { key: "shear", label: "shear 剪切", type: "number", step: 0.1 },
+      { key: "perspective", label: "perspective 透视", type: "number", step: 0.0001 },
+      { key: "flipud", label: "flipud 上下翻转概率", type: "number", step: 0.01 },
+      { key: "fliplr", label: "fliplr 左右翻转概率", type: "number", step: 0.01 },
+      { key: "bgr", label: "bgr 通道翻转概率", type: "number", step: 0.01 },
+      { key: "mosaic", label: "mosaic 马赛克概率", type: "number", step: 0.01 },
+      { key: "mixup", label: "mixup 混合增强概率", type: "number", step: 0.01 },
+      { key: "copy_paste", label: "copy_paste 复制粘贴概率", type: "number", step: 0.01 },
+      { key: "erasing", label: "erasing 随机擦除概率", type: "number", step: 0.01 },
+      { key: "crop_fraction", label: "crop_fraction 裁剪比例", type: "number", step: 0.01 },
+    ],
+  },
+  {
+    title: "分割专用",
+    fields: [
+      { key: "overlap_mask", label: "overlap_mask 掩码重叠", type: "bool" },
+      { key: "mask_ratio", label: "mask_ratio 掩码下采样", type: "number" },
+    ],
+  },
+];
+
+const mergeParams = (src = {}) => ({ ...DEFAULT_TRAIN_PARAMS, ...(src || {}) });
+
 const TrainingLayout = ({ children, ...routeProps }) => (
   <SidebarMenu
     menuItems={[
       { title: "启动训练", path: "/" },
       { title: "任务", path: "/tasks" },
+      { title: "配置管理", path: "/configs" },
     ]}
     path={routeProps.match.url}
   >
@@ -40,219 +171,56 @@ const TrainingLayout = ({ children, ...routeProps }) => (
   </SidebarMenu>
 );
 
-const ConfigModal = ({ visible, onClose, onSaved }) => {
-  const api = useAPI();
-  const [configs, setConfigs] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [form, setForm] = useState({
-    name: "",
-    task_type: "obb",
-    model_yaml: "yolov8x-obb",
-    model_pt: "yolov8x-obb",
-    classes: "",
-    epochs: 1000,
-    batch: 16,
-    patience: 200,
-    imgsz: 640,
-    device: "0",
-  });
-
-  const applyConfig = (config) => {
-    setSelectedId(config?.id ?? null);
-    setError("");
-    setForm({
-      name: config?.name || "",
-      task_type: config?.task_type || "obb",
-      model_yaml: config?.model_yaml || "yolov8x-obb",
-      model_pt: config?.model_pt || "yolov8x-obb",
-      classes: (config?.classes || []).join(", "),
-      epochs: config?.epochs || 1000,
-      batch: config?.batch || 16,
-      patience: config?.patience || 200,
-      imgsz: config?.imgsz || 640,
-      device: config?.device || "0",
-    });
-  };
-
-  const load = useCallback(() => {
-    api.callApi("trainConfigs", {}).then((res) => {
-      const list = Array.isArray(res) ? res : res?.data || res?.results || [];
-      setConfigs(list);
-      setSelectedId((prev) => {
-        if (prev != null && list.some((c) => c.id === prev)) return prev;
-        if (list.length) {
-          const first = list[0];
-          setForm({
-            name: first.name || "",
-            task_type: first.task_type || "obb",
-            model_yaml: first.model_yaml || "yolov8x-obb",
-            model_pt: first.model_pt || "yolov8x-obb",
-            classes: (first.classes || []).join(", "),
-            epochs: first.epochs || 1000,
-            batch: first.batch || 16,
-            patience: first.patience || 200,
-            imgsz: first.imgsz || 640,
-            device: first.device || "0",
-          });
-          return first.id;
-        }
-        return null;
-      });
-    }).catch(() => {});
-  }, [api]);
-
-  useEffect(() => {
-    if (visible) load();
-  }, [visible, load]);
-
-  const selectConfig = (config) => applyConfig(config);
-
-  const newConfig = () => {
-    setSelectedId(null);
-    setError("");
-    setForm({
-      name: "",
-      task_type: "obb",
-      model_yaml: "yolov8x-obb",
-      model_pt: "yolov8x-obb",
-      classes: "",
-      epochs: 1000,
-      batch: 16,
-      patience: 200,
-      imgsz: 640,
-      device: "0",
-    });
-  };
-
-  const saveConfig = async () => {
-    setSaving(true);
-    setError("");
-    const body = {
-      ...form,
-      classes: form.classes.split(",").map((c) => c.trim()).filter(Boolean),
-    };
-    try {
-      if (selectedId) {
-        await api.callApi("updateTrainConfig", { params: { config_id: selectedId }, body });
-      } else {
-        await api.callApi("createTrainConfig", { body });
-      }
-      onSaved?.();
-      load();
-    } catch (e) {
-      setError(e?.response?.detail || e?.detail || e?.error || "保存失败");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const deleteConfig = async () => {
-    if (!selectedId || !confirm("确定删除该配置？")) return;
-    await api.callApi("deleteTrainConfig", { params: { config_id: selectedId } });
-    setSelectedId(null);
-    onSaved?.();
-    load();
-  };
-
-  if (!visible) return null;
-
-  return (
-    <Modal visible bare allowClose onHide={onClose} width={820}>
-      <Block name="training-page">
-        <Elem name="modal">
-          <Elem name="modal-header">
-            <Elem name="panel-title" style={{ marginBottom: 0 }}>配置管理</Elem>
-            <Button size="small" look="outlined" onClick={onClose}>关闭</Button>
-          </Elem>
-          <Elem name="modal-body">
-            <Elem name="config-sidebar">
-              <Button size="small" look="primary" onClick={newConfig} style={{ width: "100%", marginBottom: 12 }}>
-                + 新建配置
-              </Button>
-              <Elem name="config-list">
-                {configs.map((c) => (
-                  <Elem
-                    key={c.id}
-                    name="config-item"
-                    mod={{ selected: selectedId === c.id }}
-                    onClick={() => selectConfig(c)}
-                  >
-                    <Elem name="config-name">{c.name}</Elem>
-                    <Elem name="config-type">{c.task_type}</Elem>
-                    <Elem name="config-classes">{(c.classes || []).join(", ")}</Elem>
-                  </Elem>
-                ))}
-              </Elem>
-            </Elem>
-            <Elem name="config-detail">
-              <Elem name="section">
-                <Elem name="label">配置名称</Elem>
-                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </Elem>
-              <Elem name="form-row">
-                <Elem name="form-item">
-                  <Elem name="label">任务类型</Elem>
-                  <select value={form.task_type} onChange={(e) => setForm({ ...form, task_type: e.target.value })}>
-                    <option value="obb">obb</option>
-                    <option value="detect">detect</option>
-                    <option value="cls">cls</option>
-                    <option value="seg">seg</option>
-                  </select>
-                </Elem>
-                <Elem name="form-item">
-                  <Elem name="label">model_yaml</Elem>
-                  <input value={form.model_yaml} onChange={(e) => setForm({ ...form, model_yaml: e.target.value })} />
-                </Elem>
-                <Elem name="form-item">
-                  <Elem name="label">model_pt</Elem>
-                  <input value={form.model_pt} onChange={(e) => setForm({ ...form, model_pt: e.target.value })} />
+const ParamFields = ({ values, onChange }) => (
+  <>
+    {PARAM_GROUPS.map((group) => (
+      <Elem name="section" key={group.title}>
+        <Elem name="label">{group.title}</Elem>
+        <Elem name="params-grid">
+          {group.fields.map((field) => {
+            const val = values[field.key];
+            return (
+              <Elem name="param" key={field.key}>
+                <Elem name="param-label">{field.label}</Elem>
+                <Elem name="param-input">
+                  {field.type === "bool" ? (
+                    <select
+                      value={val ? "true" : "false"}
+                      onChange={(e) => onChange(field.key, e.target.value === "true")}
+                    >
+                      <option value="true">true 是</option>
+                      <option value="false">false 否</option>
+                    </select>
+                  ) : field.type === "select" ? (
+                    <select value={val} onChange={(e) => onChange(field.key, e.target.value)}>
+                      {field.options.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type === "number" ? "number" : "text"}
+                      step={field.step}
+                      value={val ?? ""}
+                      onChange={(e) => {
+                        if (field.type === "number") {
+                          const n = e.target.value === "" ? 0 : Number(e.target.value);
+                          onChange(field.key, Number.isNaN(n) ? 0 : n);
+                        } else {
+                          onChange(field.key, e.target.value);
+                        }
+                      }}
+                    />
+                  )}
                 </Elem>
               </Elem>
-              <Elem name="section">
-                <Elem name="label">类别（逗号分隔，须与所选项目标签一致）</Elem>
-                <textarea value={form.classes} onChange={(e) => setForm({ ...form, classes: e.target.value })} />
-              </Elem>
-              <Elem name="params-grid">
-                {[
-                  ["epochs", form.epochs],
-                  ["batch", form.batch],
-                  ["patience", form.patience],
-                  ["imgsz", form.imgsz],
-                ].map(([key, val]) => (
-                  <Elem name="param" key={key}>
-                    <Elem name="param-label">{key}</Elem>
-                    <Elem name="param-input">
-                      <input
-                        type="number"
-                        value={val}
-                        onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) || 0 })}
-                      />
-                    </Elem>
-                  </Elem>
-                ))}
-                <Elem name="param">
-                  <Elem name="param-label">device</Elem>
-                  <Elem name="param-input">
-                    <input value={form.device} onChange={(e) => setForm({ ...form, device: e.target.value })} />
-                  </Elem>
-                </Elem>
-              </Elem>
-              {error && <Elem name="error">{error}</Elem>}
-              <Space style={{ marginTop: 16 }}>
-                {selectedId && (
-                  <Button look="negative" onClick={deleteConfig}>删除</Button>
-                )}
-                <Button look="primary" waiting={saving} onClick={saveConfig}>保存</Button>
-              </Space>
-            </Elem>
-          </Elem>
+            );
+          })}
         </Elem>
-      </Block>
-    </Modal>
-  );
-};
+      </Elem>
+    ))}
+  </>
+);
 
 const StartTrain = () => {
   const history = useHistory();
@@ -261,46 +229,31 @@ const StartTrain = () => {
   const [projects, setProjects] = useState([]);
   const [configName, setConfigName] = useState("");
   const [selectedProjectIds, setSelectedProjectIds] = useState([]);
-  const [epochs, setEpochs] = useState(1000);
-  const [batch, setBatch] = useState(16);
-  const [patience, setPatience] = useState(200);
-  const [imgsz, setImgsz] = useState(640);
-  const [device, setDevice] = useState("0");
+  const [trainParams, setTrainParams] = useState(mergeParams());
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
-  const [configModal, setConfigModal] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
 
-  const loadConfigs = useCallback(() => {
+  useEffect(() => {
     api.callApi("trainConfigs", {}).then((res) => {
       const list = Array.isArray(res) ? res : res?.data || res?.results || [];
       setConfigs(list);
-      if (!configName && list.length) setConfigName(list[0].name);
+      if (list.length) {
+        setConfigName((prev) => prev || list[0].name);
+      }
     }).catch(() => {});
-  }, [api, configName]);
-
-  useEffect(() => {
-    loadConfigs();
     api.callApi("projects", {
       params: {
         page: 1,
         page_size: 1000,
-        include: ["id", "title", "num_tasks_with_annotations", "task_number"].join(","),
+        include: ["id", "title"].join(","),
       },
-    }).then((data) => {
-      setProjects(data?.results || []);
-    }).catch(() => {});
-  }, []);
+    }).then((data) => setProjects(data?.results || [])).catch(() => {});
+  }, [api]);
 
   useEffect(() => {
     const cfg = configs.find((c) => c.name === configName);
-    if (cfg) {
-      setEpochs(cfg.epochs || 1000);
-      setBatch(cfg.batch || 16);
-      setPatience(cfg.patience || 200);
-      setImgsz(cfg.imgsz || 640);
-      setDevice(cfg.device || "0");
-    }
+    if (cfg) setTrainParams(mergeParams(cfg.train_params || cfg));
   }, [configName, configs]);
 
   const filteredProjects = useMemo(() => {
@@ -310,10 +263,10 @@ const StartTrain = () => {
   }, [projects, projectSearch]);
 
   const toggleProject = (id) => {
-    setSelectedProjectIds((prev) => (
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    ));
+    setSelectedProjectIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
+
+  const setParam = (key, value) => setTrainParams((prev) => ({ ...prev, [key]: value }));
 
   const startTraining = async () => {
     if (!configName || !selectedProjectIds.length) return;
@@ -324,11 +277,7 @@ const StartTrain = () => {
         body: {
           config_name: configName,
           project_ids: selectedProjectIds,
-          epochs,
-          batch,
-          patience,
-          imgsz,
-          device,
+          train_params: trainParams,
         },
         suppressError: true,
         errorFilter: () => true,
@@ -338,27 +287,20 @@ const StartTrain = () => {
         setError(typeof msg === "string" ? msg : JSON.stringify(msg));
         return;
       }
-      const jobId = job?.id;
-      if (jobId) history.push(`/projects/train/tasks/${jobId}`);
-      else history.push("/projects/train/tasks");
+      history.push(job?.id ? `/projects/train/tasks/${job.id}` : "/projects/train/tasks");
     } catch (e) {
-      setError(e?.response?.error || e?.error || e?.detail || e?.message || "启动失败");
+      setError(e?.message || "启动失败");
     } finally {
       setStarting(false);
     }
   };
-
-  const configOptions = configs.map((c) => ({
-    label: `${c.name} (${c.task_type}, ${(c.classes || []).join("/")})`,
-    value: c.name,
-  }));
 
   return (
     <Block name="training-page">
       <Elem name="panel">
         <Elem name="panel-title">启动训练</Elem>
         <Elem name="hint">
-          可选择一个或多个项目，标注数据将合并为同一训练集。所选项目的标签类别必须与配置 classes 完全一致，否则会报错。
+          选择配置与一个/多个项目合并训练。项目标签类别必须与配置 classes 完全一致，否则会报错。提交后请到「任务」页查看进度。
         </Elem>
 
         <Elem name="section">
@@ -370,18 +312,19 @@ const StartTrain = () => {
               searchable
               searchPlaceholder="搜索配置..."
               placeholder="请选择配置"
-              options={configOptions}
+              options={configs.map((c) => ({
+                label: `${c.name} (${c.task_type}, ${(c.classes || []).join("/")})`,
+                value: c.name,
+              }))}
             />
-            <Button size="small" look="outlined" onClick={() => setConfigModal(true)}>
-              管理配置
+            <Button size="small" look="outlined" onClick={() => history.push("/projects/train/configs")}>
+              去配置管理
             </Button>
           </Elem>
         </Elem>
 
         <Elem name="section">
-          <Elem name="label">
-            训练项目（已选 {selectedProjectIds.length}）
-          </Elem>
+          <Elem name="label">训练项目（已选 {selectedProjectIds.length}）</Elem>
           <input
             type="text"
             placeholder="搜索项目名称或 ID..."
@@ -394,11 +337,7 @@ const StartTrain = () => {
               <Elem name="empty">暂无项目</Elem>
             ) : (
               filteredProjects.map((p) => (
-                <Elem
-                  tag="label"
-                  key={p.id}
-                  name="project-option"
-                >
+                <Elem tag="label" key={p.id} name="project-option">
                   <input
                     type="checkbox"
                     checked={selectedProjectIds.includes(p.id)}
@@ -412,29 +351,7 @@ const StartTrain = () => {
           </Elem>
         </Elem>
 
-        <Elem name="section">
-          <Elem name="label">训练参数</Elem>
-          <Elem name="params-grid">
-            {[
-              ["Epochs", epochs, setEpochs, "number"],
-              ["Batch", batch, setBatch, "number"],
-              ["Patience", patience, setPatience, "number"],
-              ["Img Size", imgsz, setImgsz, "number"],
-              ["Device", device, setDevice, "text"],
-            ].map(([label, val, setter, type]) => (
-              <Elem name="param" key={label}>
-                <Elem name="param-label">{label}</Elem>
-                <Elem name="param-input">
-                  <input
-                    type={type}
-                    value={val}
-                    onChange={(e) => setter(type === "number" ? Number(e.target.value) || 0 : e.target.value)}
-                  />
-                </Elem>
-              </Elem>
-            ))}
-          </Elem>
-        </Elem>
+        <ParamFields values={trainParams} onChange={setParam} />
 
         {error && <Elem name="error">{String(error)}</Elem>}
 
@@ -449,12 +366,191 @@ const StartTrain = () => {
           </Button>
         </Space>
       </Elem>
+    </Block>
+  );
+};
 
-      <ConfigModal
-        visible={configModal}
-        onClose={() => setConfigModal(false)}
-        onSaved={loadConfigs}
-      />
+const ConfigManagement = () => {
+  const api = useAPI();
+  const [configs, setConfigs] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [meta, setMeta] = useState({
+    name: "",
+    task_type: "obb",
+    model_yaml: "yolov8x-obb",
+    model_pt: "yolov8x-obb",
+    data_yaml: "",
+    classes: "",
+  });
+  const [trainParams, setTrainParams] = useState(mergeParams());
+
+  const load = useCallback(() => {
+    api.callApi("trainConfigs", {}).then((res) => {
+      const list = Array.isArray(res) ? res : res?.data || res?.results || [];
+      setConfigs(list);
+      setSelectedId((prev) => {
+        const keep = list.find((c) => c.id === prev);
+        const target = keep || list[0];
+        if (!target) {
+          setMeta({ name: "", task_type: "obb", model_yaml: "yolov8x-obb", model_pt: "yolov8x-obb", data_yaml: "", classes: "" });
+          setTrainParams(mergeParams());
+          return null;
+        }
+        setMeta({
+          name: target.name || "",
+          task_type: target.task_type || "obb",
+          model_yaml: target.model_yaml || "yolov8x-obb",
+          model_pt: target.model_pt || "yolov8x-obb",
+          data_yaml: target.data_yaml || "",
+          classes: (target.classes || []).join(", "),
+        });
+        setTrainParams(mergeParams(target.train_params || target));
+        return target.id;
+      });
+    }).catch(() => {});
+  }, [api]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = configs.filter((c) =>
+    String(c.name || "").toLowerCase().includes(searchTerm.toLowerCase()),
+  );
+
+  const selectConfig = (config) => {
+    setSelectedId(config.id);
+    setError("");
+    setMeta({
+      name: config.name || "",
+      task_type: config.task_type || "obb",
+      model_yaml: config.model_yaml || "yolov8x-obb",
+      model_pt: config.model_pt || "yolov8x-obb",
+      data_yaml: config.data_yaml || "",
+      classes: (config.classes || []).join(", "),
+    });
+    setTrainParams(mergeParams(config.train_params || config));
+  };
+
+  const newConfig = () => {
+    setSelectedId(null);
+    setError("");
+    setMeta({ name: "", task_type: "obb", model_yaml: "yolov8x-obb", model_pt: "yolov8x-obb", data_yaml: "", classes: "" });
+    setTrainParams(mergeParams());
+  };
+
+  const saveConfig = async () => {
+    setSaving(true);
+    setError("");
+    const body = {
+      ...meta,
+      classes: meta.classes.split(",").map((c) => c.trim()).filter(Boolean),
+      train_params: trainParams,
+    };
+    try {
+      const res = selectedId
+        ? await api.callApi("updateTrainConfig", { params: { config_id: selectedId }, body, suppressError: true, errorFilter: () => true })
+        : await api.callApi("createTrainConfig", { body, suppressError: true, errorFilter: () => true });
+      if (!res || res.error) {
+        setError(res?.response?.error || res?.error || "保存失败");
+        return;
+      }
+      load();
+    } catch (e) {
+      setError(e?.message || "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteConfig = async () => {
+    if (!selectedId || !confirm("确定删除该配置？")) return;
+    await api.callApi("deleteTrainConfig", { params: { config_id: selectedId } });
+    setSelectedId(null);
+    load();
+  };
+
+  return (
+    <Block name="training-page">
+      <Elem name="panel" mod={{ wide: true }}>
+        <Elem name="panel-title">配置管理</Elem>
+        <Elem name="hint">左侧选择配置，右侧编辑基础信息与全部训练超参。保存后可在「启动训练」中直接选用。</Elem>
+
+        <Elem name="config-layout">
+          <Elem name="config-sidebar">
+            <Button size="small" look="primary" onClick={newConfig} style={{ width: "100%", marginBottom: 12 }}>
+              + 新建配置
+            </Button>
+            <input
+              type="text"
+              placeholder="搜索配置..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{ width: "100%", marginBottom: 10 }}
+            />
+            <Elem name="config-list">
+              {filtered.map((c) => (
+                <Elem
+                  key={c.id}
+                  name="config-item"
+                  mod={{ selected: selectedId === c.id }}
+                  onClick={() => selectConfig(c)}
+                >
+                  <Elem name="config-name">{c.name}</Elem>
+                  <Elem name="config-type">{c.task_type}</Elem>
+                  <Elem name="config-classes">{(c.classes || []).join(", ")}</Elem>
+                </Elem>
+              ))}
+            </Elem>
+          </Elem>
+
+          <Elem name="config-detail">
+            <Elem name="section">
+              <Elem name="label">基础信息</Elem>
+              <Elem name="form-row">
+                <Elem name="form-item">
+                  <Elem name="param-label">name 配置名称</Elem>
+                  <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} />
+                </Elem>
+                <Elem name="form-item">
+                  <Elem name="param-label">task_type 任务类型</Elem>
+                  <select value={meta.task_type} onChange={(e) => setMeta({ ...meta, task_type: e.target.value })}>
+                    <option value="obb">obb 旋转检测</option>
+                    <option value="detect">detect 目标检测</option>
+                    <option value="cls">cls 分类</option>
+                    <option value="seg">seg 分割</option>
+                  </select>
+                </Elem>
+              </Elem>
+              <Elem name="form-row">
+                <Elem name="form-item">
+                  <Elem name="param-label">model_yaml 模型结构</Elem>
+                  <input value={meta.model_yaml} onChange={(e) => setMeta({ ...meta, model_yaml: e.target.value })} />
+                </Elem>
+                <Elem name="form-item">
+                  <Elem name="param-label">model_pt 预训练权重名</Elem>
+                  <input value={meta.model_pt} onChange={(e) => setMeta({ ...meta, model_pt: e.target.value })} />
+                </Elem>
+                <Elem name="form-item">
+                  <Elem name="param-label">data_yaml 数据配置名(可空)</Elem>
+                  <input value={meta.data_yaml} onChange={(e) => setMeta({ ...meta, data_yaml: e.target.value })} />
+                </Elem>
+              </Elem>
+              <Elem name="param-label">classes 类别(逗号分隔，须与项目标签一致)</Elem>
+              <textarea value={meta.classes} onChange={(e) => setMeta({ ...meta, classes: e.target.value })} />
+            </Elem>
+
+            <ParamFields values={trainParams} onChange={(k, v) => setTrainParams((p) => ({ ...p, [k]: v }))} />
+
+            {error && <Elem name="error">{String(error)}</Elem>}
+            <Space style={{ marginTop: 16 }}>
+              {selectedId && <Button look="negative" onClick={deleteConfig}>删除配置</Button>}
+              <Button look="primary" waiting={saving} onClick={saveConfig}>保存配置</Button>
+            </Space>
+          </Elem>
+        </Elem>
+      </Elem>
     </Block>
   );
 };
@@ -465,15 +561,17 @@ const TaskList = () => {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
+  const [projectQuery, setProjectQuery] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
     const params = { page: 1, page_size: 50 };
     if (statusFilter) params.status = statusFilter;
+    if (projectQuery.trim()) params.project = projectQuery.trim();
     api.callApi("trainJobs", { params }).then((data) => {
       setJobs(data?.results || []);
     }).catch(() => {}).finally(() => setLoading(false));
-  }, [api, statusFilter]);
+  }, [api, statusFilter, projectQuery]);
 
   useEffect(() => {
     load();
@@ -486,12 +584,21 @@ const TaskList = () => {
       <Elem name="panel">
         <Elem name="panel-header">
           <Elem name="panel-title" style={{ marginBottom: 0 }}>训练任务</Elem>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">全部状态</option>
-            {Object.entries(STATUS_LABEL).filter(([k]) => k !== "none").map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
+          <Space>
+            <input
+              type="text"
+              placeholder="按项目名称或 ID 搜索..."
+              value={projectQuery}
+              onChange={(e) => setProjectQuery(e.target.value)}
+              style={{ minWidth: 220 }}
+            />
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">全部状态</option>
+              {Object.entries(STATUS_LABEL).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+          </Space>
         </Elem>
 
         {loading && !jobs.length ? (
@@ -512,17 +619,13 @@ const TaskList = () => {
                     {STATUS_LABEL[job.status] || job.status}
                   </Elem>
                 </Elem>
-                <Elem name="job-meta">
-                  项目：{(job.project_titles || []).join("、") || "—"}
-                </Elem>
+                <Elem name="job-meta">项目：{(job.project_titles || []).join("、") || "—"}</Elem>
                 <Elem name="job-meta">
                   {job.created_by || "—"} · {job.created_at}
                   {isRunningStatus(job.status) ? ` · Epoch ${job.current_epoch}/${job.total_epochs} (${job.progress}%)` : ""}
                   {job.model_count ? ` · 模型 ${job.model_count}` : ""}
                 </Elem>
-                {job.error_message && (
-                  <Elem name="job-error">{job.error_message}</Elem>
-                )}
+                {job.error_message && <Elem name="job-error">{job.error_message}</Elem>}
               </Elem>
             ))}
           </Elem>
@@ -568,43 +671,13 @@ const TaskDetail = () => {
     setLogs([]);
     loadJob();
     loadLogs();
-    const id = setInterval(() => {
-      loadJob();
-      loadLogs();
-    }, 2500);
+    const id = setInterval(() => { loadJob(); loadLogs(); }, 2500);
     return () => clearInterval(id);
   }, [jobId, loadJob, loadLogs]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
-
-  const stopJob = async () => {
-    if (!jobId || !confirm("确定停止该训练任务？")) return;
-    setStopping(true);
-    try {
-      await api.callApi("stopTrainJob", { params: { job_id: jobId } });
-      loadJob();
-    } finally {
-      setStopping(false);
-    }
-  };
-
-  const clearLogs = async () => {
-    await api.callApi("clearTrainJobLogs", { params: { job_id: jobId } });
-    sinceRef.current = 0;
-    setLogs([]);
-  };
-
-  const downloadModel = (model) => {
-    window.open(`/api/train/models/${model.id}/download`, "_blank");
-  };
-
-  const deleteModel = async (modelId) => {
-    if (!confirm("确定删除该模型文件？")) return;
-    await api.callApi("deleteModel", { params: { mid: modelId } });
-    loadJob();
-  };
 
   if (!job) {
     return (
@@ -618,21 +691,34 @@ const TaskDetail = () => {
     (log.message || "").toLowerCase().includes(searchTerm.toLowerCase()),
   );
   const running = isRunningStatus(job.status);
+  const params = job.params || {};
 
   return (
     <Block name="training-page">
-      <Elem name="panel">
+      <Elem name="panel" mod={{ wide: true }}>
         <Elem name="panel-header">
           <Space>
             <Button size="small" look="outlined" onClick={() => history.push("/projects/train/tasks")}>
               ← 返回列表
             </Button>
-            <Elem name="panel-title" style={{ marginBottom: 0 }}>
-              任务 #{job.id}
-            </Elem>
+            <Elem name="panel-title" style={{ marginBottom: 0 }}>任务 #{job.id}</Elem>
           </Space>
           {running && (
-            <Button look="negative" size="small" waiting={stopping} onClick={stopJob}>
+            <Button
+              look="negative"
+              size="small"
+              waiting={stopping}
+              onClick={async () => {
+                if (!confirm("确定停止该训练任务？")) return;
+                setStopping(true);
+                try {
+                  await api.callApi("stopTrainJob", { params: { job_id: jobId } });
+                  loadJob();
+                } finally {
+                  setStopping(false);
+                }
+              }}
+            >
               停止训练
             </Button>
           )}
@@ -665,12 +751,6 @@ const TaskDetail = () => {
               {(job.projects || []).map((p) => `${p.title} (#${p.id})`).join("、") || "—"}
             </Elem>
           </Elem>
-          <Elem name="detail-item" style={{ gridColumn: "1 / -1" }}>
-            <Elem name="detail-label">训练参数</Elem>
-            <Elem name="detail-value">
-              <code>{JSON.stringify(job.params || {}, null, 0)}</code>
-            </Elem>
-          </Elem>
         </Elem>
 
         {running && (
@@ -679,11 +759,22 @@ const TaskDetail = () => {
               <Elem name="progress-fill" style={{ width: `${job.progress || 0}%` }} />
             </Elem>
             <Elem name="progress-text">{job.progress || 0}%</Elem>
-            <Elem name="epoch-text">
-              Epoch {job.current_epoch}/{job.total_epochs}
-            </Elem>
+            <Elem name="epoch-text">Epoch {job.current_epoch}/{job.total_epochs}</Elem>
           </Elem>
         )}
+
+        <Elem name="section">
+          <Elem name="label">训练参数明细</Elem>
+          <Elem name="params-readonly">
+            {Object.entries(params)
+              .filter(([k]) => k !== "project_ids")
+              .map(([key, val]) => (
+                <Elem name="param-chip" key={key}>
+                  <strong>{key}</strong>: {String(val)}
+                </Elem>
+              ))}
+          </Elem>
+        </Elem>
 
         {job.error_message && (
           <Elem name="error-box">
@@ -715,12 +806,20 @@ const TaskDetail = () => {
               {job.models.map((model) => (
                 <Elem name="model-card" key={model.id}>
                   <Elem name="model-name">{model.name}</Elem>
-                  <Elem name="model-meta">
-                    {model.created_at} · {formatSize(model.file_size)}
-                  </Elem>
+                  <Elem name="model-meta">{model.created_at} · {formatSize(model.file_size)}</Elem>
                   <Space>
-                    <Button size="small" look="outlined" onClick={() => downloadModel(model)}>下载</Button>
-                    <Button size="small" look="negative" onClick={() => deleteModel(model.id)}>删除</Button>
+                    <Button size="small" look="outlined" onClick={() => window.open(`/api/train/models/${model.id}/download`, "_blank")}>下载</Button>
+                    <Button
+                      size="small"
+                      look="negative"
+                      onClick={async () => {
+                        if (!confirm("确定删除该模型文件？")) return;
+                        await api.callApi("deleteModel", { params: { mid: model.id } });
+                        loadJob();
+                      }}
+                    >
+                      删除
+                    </Button>
                   </Space>
                 </Elem>
               ))}
@@ -732,13 +831,18 @@ const TaskDetail = () => {
           <Elem name="panel-header">
             <Elem name="label" style={{ marginBottom: 0 }}>训练日志</Elem>
             <Space>
-              <input
-                type="text"
-                placeholder="搜索日志..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-              <Button size="small" look="outlined" onClick={clearLogs}>清空</Button>
+              <input type="text" placeholder="搜索日志..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              <Button
+                size="small"
+                look="outlined"
+                onClick={async () => {
+                  await api.callApi("clearTrainJobLogs", { params: { job_id: jobId } });
+                  sinceRef.current = 0;
+                  setLogs([]);
+                }}
+              >
+                清空
+              </Button>
             </Space>
           </Elem>
           <Elem name="log-viewer" ref={logRef}>
@@ -763,10 +867,13 @@ const TaskDetail = () => {
 export const TrainingPage = {
   title: "训练",
   path: "/train",
+  exact: true,
   layout: TrainingLayout,
   component: StartTrain,
   pages: {
+    start: { path: "/", component: StartTrain, exact: true },
     tasks: { title: "任务", path: "/tasks", component: TaskList, exact: true },
     taskDetail: { path: "/tasks/:jobId", component: TaskDetail, exact: true },
+    configs: { title: "配置管理", path: "/configs", component: ConfigManagement, exact: true },
   },
 };

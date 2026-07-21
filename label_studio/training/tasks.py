@@ -199,16 +199,18 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
         device = 0 if torch.cuda.is_available() else 'cpu'
         _log(job, f'自动选择设备：{device}')
 
-    model.train(
-        data=data_path,
-        epochs=epochs,
-        batch=params.get('batch', 16),
-        patience=params.get('patience', 200),
-        imgsz=params.get('imgsz', 640),
-        device=device,
-        pretrained=True,
-        plots=True,
-    )
+    from .params import merge_train_params, BLOCKED_TRAIN_KEYS
+    train_kwargs = merge_train_params(params)
+    train_kwargs['data'] = data_path
+    train_kwargs['device'] = device
+    train_kwargs['epochs'] = epochs
+    # 去掉不应传给 train() 的业务字段
+    for key in list(train_kwargs.keys()):
+        if key in BLOCKED_TRAIN_KEYS or key in ('project_ids',):
+            train_kwargs.pop(key, None)
+
+    _log(job, f'训练参数：{ {k: train_kwargs[k] for k in sorted(train_kwargs) if k != "data"} }')
+    model.train(**train_kwargs)
 
     if _is_stop_requested(job):
         raise TrainingStopped('训练已被用户停止')

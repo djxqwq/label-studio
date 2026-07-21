@@ -27,6 +27,7 @@ class ModelConfig(models.Model):
     patience = models.IntegerField(default=200)
     imgsz = models.IntegerField(default=640)
     device = models.CharField(max_length=64, default='0')
+    train_params = models.JSONField(default=dict, blank=True, help_text="完整 YOLO 训练超参")
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -36,7 +37,12 @@ class ModelConfig(models.Model):
     def __str__(self):
         return self.name
 
+    def resolved_train_params(self):
+        from .params import extract_train_params_from_config
+        return extract_train_params_from_config(self)
+
     def to_dict(self):
+        train_params = self.resolved_train_params()
         return {
             'id': self.id,
             'name': self.name,
@@ -45,11 +51,12 @@ class ModelConfig(models.Model):
             'model_pt': self.model_pt,
             'data_yaml': self.data_yaml,
             'classes': self.classes,
-            'epochs': self.epochs,
-            'batch': self.batch,
-            'patience': self.patience,
-            'imgsz': self.imgsz,
-            'device': self.device,
+            'epochs': train_params.get('epochs', self.epochs),
+            'batch': train_params.get('batch', self.batch),
+            'patience': train_params.get('patience', self.patience),
+            'imgsz': train_params.get('imgsz', self.imgsz),
+            'device': train_params.get('device', self.device),
+            'train_params': train_params,
         }
 
 

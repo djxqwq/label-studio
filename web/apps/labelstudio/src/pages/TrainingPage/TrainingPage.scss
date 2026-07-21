@@ -9,6 +9,10 @@
   &__panel {
     padding: 20px 28px;
     max-width: 960px;
+
+    &_wide {
+      max-width: 1200px;
+    }
   }
 
   &__panel-header {
@@ -93,7 +97,8 @@
     font-weight: 500;
   }
 
-  &__param-input input {
+  &__param-input input,
+  &__param-input select {
     width: 100%;
     padding: 8px 12px;
     border: 1px solid var(--color-neutral-border);
@@ -442,6 +447,29 @@
     overflow: hidden;
   }
 
+  &__config-layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 16px;
+    min-height: 560px;
+    align-items: start;
+  }
+
+  &__params-readonly {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__param-chip {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: var(--color-neutral-surface);
+    border: 1px solid var(--color-neutral-border);
+    color: var(--color-neutral-content);
+  }
+
   &__modal-header {
     display: flex;
     align-items: center;
@@ -458,9 +486,40 @@
   }
 
   &__config-sidebar {
-    padding: 16px;
-    border-right: 1px solid var(--color-neutral-border);
+    padding: 12px;
+    border: 1px solid var(--color-neutral-border);
+    border-radius: 8px;
     overflow: auto;
+    max-height: 70vh;
+    background: var(--color-neutral-background);
+  }
+
+  &__config-detail {
+    padding: 16px 18px;
+    overflow: auto;
+    max-height: 70vh;
+    border: 1px solid var(--color-neutral-border);
+    border-radius: 8px;
+    background: var(--color-neutral-surface);
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--color-neutral-border);
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+      margin-bottom: 4px;
+      background: var(--color-neutral-background);
+      color: var(--color-neutral-content);
+    }
+
+    textarea {
+      min-height: 72px;
+      resize: vertical;
+    }
   }
 
   &__config-list {
@@ -502,28 +561,6 @@
   &__config-classes {
     font-size: 12px;
     color: var(--color-neutral-content-subtle);
-  }
-
-  &__config-detail {
-    padding: 20px;
-    overflow: auto;
-
-    input,
-    textarea,
-    select {
-      width: 100%;
-      padding: 8px 12px;
-      border: 1px solid var(--color-neutral-border);
-      border-radius: 4px;
-      font-size: 14px;
-      box-sizing: border-box;
-      margin-bottom: 4px;
-    }
-
-    textarea {
-      min-height: 72px;
-      resize: vertical;
-    }
   }
 
   &__empty {
