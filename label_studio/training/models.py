@@ -192,12 +192,23 @@ class TrainedModel(models.Model):
         ordering = ['-created_at']
 
     def to_dict(self):
+        metrics = self.metrics or {}
+        variant = metrics.get('variant')
+        if not variant:
+            lower = (self.name or '').lower()
+            if 'best' in lower:
+                variant = 'best'
+            elif 'last' in lower:
+                variant = 'last'
+            else:
+                variant = 'model'
         return {
             'id': self.id,
             'name': self.name,
+            'variant': variant,
             'file_size': self.file_size,
             'file_size_mb': round(self.file_size / (1024 * 1024), 2) if self.file_size else 0,
-            'metrics': self.metrics,
+            'metrics': metrics,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M'),
             'job_id': self.job_id,
         }

@@ -412,10 +412,17 @@ def _try_mirror_download(url, file, min_bytes=1e5, **kwargs):
     
     # Try multiple download sources
     mirrors = [
-        # Ultralytics official CDN (fastest and most reliable)
+        # Ultralytics official CDN
         f"https://ultralytics.com/assets/{filename}",
-        # GitHub mirrors
+        # China-friendly GitHub / HF mirrors
+        f"https://ghfast.top/{url}",
+        f"https://mirror.ghproxy.com/{url}",
+        f"https://gh-proxy.com/{url}",
+        f"https://gitdl.cn/{url}",
         f"https://ghproxy.net/{url}",
+        f"https://hf-mirror.com/Ultralytics/YOLOv8/resolve/main/{filename}",
+        f"https://huggingface.co/Ultralytics/YOLOv8/resolve/main/{filename}",
+        # legacy
         f"https://gh-proxy.cn/{url}",
         f"https://gh.ddlc.top/{url}",
     ]

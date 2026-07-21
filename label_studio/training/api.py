@@ -141,15 +141,148 @@ def _find_images_root(export_dir):
     img = os.path.join(export_dir, 'images')
     if os.path.isdir(img):
         return export_dir
+    classes = os.path.join(export_dir, 'classes')
+    if os.path.isdir(classes):
+        return export_dir
     for item in os.listdir(export_dir):
         p = os.path.join(export_dir, item)
-        if os.path.isdir(p) and os.path.isdir(os.path.join(p, 'images')):
+        if os.path.isdir(p) and (
+            os.path.isdir(os.path.join(p, 'images')) or os.path.isdir(os.path.join(p, 'classes'))
+        ):
             return p
     return None
 
 
+def _export_format_for_task(task_type):
+    if task_type == 'obb':
+        return 'YOLO_OBB_WITH_IMAGES'
+    if task_type in ('detect', 'seg'):
+        # seg 使用 YOLO 多边形标注（PolygonLabels），与 detect 同为 YOLO_WITH_IMAGES
+        return 'YOLO_WITH_IMAGES'
+    return None
+
+
+def _extract_choice_label(annotation):
+    """从 annotation.result 提取 Choices 分类标签"""
+    result = annotation.get('result') if isinstance(annotation, dict) else None
+    if result is None and hasattr(annotation, 'result'):
+        result = annotation.result
+    if not result:
+        return None
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+        itype = (item.get('type') or '').lower()
+        value = item.get('value') or {}
+        if itype == 'choices':
+            choices = value.get('choices') or []
+            if choices:
+                return str(choices[0])
+        if itype in ('taxonomy', 'labels'):
+            labels = value.get('taxonomy') or value.get('labels') or []
+            if labels:
+                return str(labels[0] if not isinstance(labels[0], list) else labels[0][-1])
+    return None
+
+
+def _task_image_url(task_data):
+    if not isinstance(task_data, dict):
+        return None
+    for key in ('image', 'img', 'photo', 'picture'):
+        if task_data.get(key):
+            return task_data[key]
+    for val in task_data.values():
+        if isinstance(val, str) and val:
+            lower = val.lower()
+            if any(lower.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff')):
+                return val
+            if '/data/' in val or val.startswith('http'):
+                return val
+    return None
+
+
+def _resolve_image_file(url, hostname, access_token):
+    """尽量把任务图片落到本地文件路径"""
+    if not url:
+        return None
+    # 上传文件相对路径
+    if isinstance(url, str) and '/data/upload/' in url:
+        from django.conf import settings
+        rel = url.split('/data/upload/', 1)[-1].split('?', 1)[0]
+        from urllib.parse import unquote
+        rel = unquote(rel)
+        candidate = os.path.join(settings.MEDIA_ROOT, settings.UPLOAD_DIR, rel)
+        if os.path.isfile(candidate):
+            return candidate
+    try:
+        from label_studio_sdk._extensions.label_studio_tools.core.utils.io import get_local_path
+        path = get_local_path(
+            url,
+            hostname=hostname,
+            access_token=access_token,
+            download_resources=True,
+        )
+        if path and os.path.isfile(path):
+            return path
+    except Exception:
+        logger.debug('get_local_path failed for %s', url, exc_info=True)
+    return None
+
+
+def _export_cls_project(request, project, config, tmp_root):
+    """分类任务：导出为 classes/<label>/*.jpg"""
+    project_dir = tempfile.mkdtemp(dir=tmp_root, prefix=f'proj_{project.id}_cls_')
+    classes_root = os.path.join(project_dir, 'classes')
+    os.makedirs(classes_root, exist_ok=True)
+
+    hostname = request.build_absolute_uri('/')
+    access_token = None
+    try:
+        if project.organization and project.organization.created_by_id:
+            access_token = project.organization.created_by.auth_token.key
+    except Exception:
+        pass
+
+    expected = set(config.classes or [])
+    count = 0
+    task_qs = Task.objects.filter(project=project, annotations__isnull=False).distinct()
+    for task in task_qs.prefetch_related('annotations'):
+        ann = task.annotations.filter(was_cancelled=False).order_by('-updated_at').first()
+        if not ann:
+            continue
+        label = _extract_choice_label({'result': ann.result})
+        if not label:
+            continue
+        if expected and label not in expected:
+            raise ValueError(
+                f'项目「{project.title}」任务#{task.id} 类别「{label}」不在配置 classes={sorted(expected)} 中'
+            )
+        image_url = _task_image_url(task.data or {})
+        src = _resolve_image_file(image_url, hostname, access_token)
+        if not src:
+            logger.warning('skip cls task %s: cannot resolve image %s', task.id, image_url)
+            continue
+
+        ext = os.path.splitext(src)[1] or '.jpg'
+        out_dir = os.path.join(classes_root, label)
+        os.makedirs(out_dir, exist_ok=True)
+        dest = os.path.join(out_dir, f't{task.id}_{count}{ext}')
+        shutil.copy2(src, dest)
+        count += 1
+
+    if count == 0:
+        raise ValueError(
+            f'项目「{project.title}」(id={project.id}) 没有可用的分类标注'
+            f'（需要 Choices 标签，且图片可访问）'
+        )
+    return project_dir
+
+
 def _export_one_project(request, project, config, tmp_root):
-    """导出单个项目为 YOLO zip 并解压到独立目录，返回含 images/labels 的根目录"""
+    """导出单个项目，返回含 images/labels 或 classes 的根目录"""
+    if config.task_type == 'cls':
+        return _export_cls_project(request, project, config, tmp_root)
+
     tasks = []
     task_qs = Task.objects.filter(project=project, annotations__isnull=False).distinct()
     for _ids in batch(task_qs.values_list('id', flat=True), 1000):
@@ -167,7 +300,9 @@ def _export_one_project(request, project, config, tmp_root):
     saved_tmp = os.environ.get('TMP'), os.environ.get('TEMP'), os.environ.get('TMPDIR')
     os.environ['TMP'] = os.environ['TEMP'] = os.environ['TMPDIR'] = tmp_root
     try:
-        export_format = 'YOLO_OBB_WITH_IMAGES' if config.task_type == 'obb' else 'YOLO_WITH_IMAGES'
+        export_format = _export_format_for_task(config.task_type)
+        if not export_format:
+            raise ValueError(f'不支持的任务类型：{config.task_type}')
         export_file, _, _ = DataExport.generate_export_file(
             project, tasks, export_format, download_resources=True,
             get_args=request.GET, hostname=request.build_absolute_uri('/'),
@@ -198,8 +333,33 @@ def _export_one_project(request, project, config, tmp_root):
     return root
 
 
-def _merge_export_dirs(source_roots, merge_dir):
+def _merge_export_dirs(source_roots, merge_dir, task_type='detect'):
     """合并多项目导出，文件名加项目前缀避免冲突"""
+    if task_type == 'cls':
+        classes_dst = os.path.join(merge_dir, 'classes')
+        os.makedirs(classes_dst, exist_ok=True)
+        total = 0
+        for idx, root in enumerate(source_roots):
+            src_classes = os.path.join(root, 'classes')
+            if not os.path.isdir(src_classes):
+                continue
+            for cls_name in os.listdir(src_classes):
+                src_dir = os.path.join(src_classes, cls_name)
+                if not os.path.isdir(src_dir):
+                    continue
+                out_dir = os.path.join(classes_dst, cls_name)
+                os.makedirs(out_dir, exist_ok=True)
+                for name in os.listdir(src_dir):
+                    src = os.path.join(src_dir, name)
+                    if not os.path.isfile(src):
+                        continue
+                    base, ext = os.path.splitext(name)
+                    shutil.copy2(src, os.path.join(out_dir, f'p{idx}_{base}{ext}'))
+                    total += 1
+        if total == 0:
+            raise ValueError('合并后没有可用分类图片')
+        return total
+
     img_dst = os.path.join(merge_dir, 'images')
     lbl_dst = os.path.join(merge_dir, 'labels')
     os.makedirs(img_dst, exist_ok=True)
@@ -237,7 +397,7 @@ def _do_multi_project_export(request, projects, config):
         for project in projects:
             source_roots.append(_export_one_project(request, project, config, tmp_root))
         merge_dir = os.path.join(work_dir, 'merged')
-        count = _merge_export_dirs(source_roots, merge_dir)
+        count = _merge_export_dirs(source_roots, merge_dir, task_type=config.task_type)
         logger.info('multi export merged %s images from %s projects into %s', count, len(projects), merge_dir)
         return merge_dir, work_dir
     except Exception:
@@ -248,8 +408,13 @@ def _do_multi_project_export(request, projects, config):
 def _start_train_thread(job, config, params, export_dir, cleanup_dir):
     def _train():
         close_old_connections()
-        data_name = config.data_yaml or config.name
-        dataset_dir = os.path.join(_BASE, 'cv-ultralytics', 'datasets', data_name, config.task_type)
+        # 按 job.id 隔离，避免同配置并发训练互相覆盖数据集 / data.yaml
+        dataset_root = os.path.join(_BASE, 'cv-ultralytics', 'datasets', f'job_{job.id}')
+        dataset_dir = os.path.join(dataset_root, config.task_type)
+        data_yaml_path = os.path.join(
+            _BASE, 'cv-ultralytics', 'ultralytics', 'ultralytics',
+            'cfg', 'datasets', f'job_{job.id}.yaml',
+        )
         try:
             job.refresh_from_db()
             if job.stop_requested:
@@ -257,7 +422,10 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                 job.save(update_fields=['status', 'updated_at'])
                 return
 
-            build_dataset(export_dir, data_name, config.task_type, config.classes)
+            data_name = config.data_yaml or config.name
+            _, data_ref = build_dataset(
+                export_dir, data_name, config.task_type, config.classes, job_id=job.id,
+            )
             job.status = 'training'
             job.save(update_fields=['status', 'updated_at'])
 
@@ -265,7 +433,8 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                 job=job,
                 model_yaml=config.model_yaml,
                 model_pt=config.model_pt,
-                data_yaml=data_name,
+                data_yaml=data_ref,
+                task_type=config.task_type,
                 **params,
             )
 
@@ -290,8 +459,15 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
             close_old_connections()
             if cleanup_dir and os.path.exists(cleanup_dir):
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
-            if os.path.exists(dataset_dir):
+            if os.path.exists(dataset_root):
+                shutil.rmtree(dataset_root, ignore_errors=True)
+            elif os.path.exists(dataset_dir):
                 shutil.rmtree(dataset_dir, ignore_errors=True)
+            if os.path.isfile(data_yaml_path):
+                try:
+                    os.remove(data_yaml_path)
+                except OSError:
+                    logger.exception('删除 data.yaml 失败: %s', data_yaml_path)
 
     threading.Thread(target=_train, daemon=True).start()
 
@@ -612,7 +788,7 @@ class TrainJobArtifactAPI(APIView):
     """GET /api/train/jobs/{job_id}/artifacts/{key} —— 查看 F1_curve 等训练曲线图"""
     permission_required = all_permissions.projects_view
 
-    ALLOWED_KEYS = {'F1_curve', 'PR_curve', 'results'}
+    ALLOWED_KEYS = {'F1_curve', 'PR_curve', 'results', 'confusion_matrix'}
 
     def get(self, request, job_id, key):
         if key not in self.ALLOWED_KEYS:

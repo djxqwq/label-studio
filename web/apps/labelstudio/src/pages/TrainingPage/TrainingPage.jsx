@@ -300,7 +300,8 @@ const StartTrain = () => {
       <Elem name="panel">
         <Elem name="panel-title">启动训练</Elem>
         <Elem name="hint">
-          选择配置与一个/多个项目合并训练。项目标签类别必须与配置 classes 完全一致，否则会报错。提交后请到「任务」页查看进度。
+          选择配置与一个/多个项目合并训练。项目标签类别必须与配置 classes 完全一致，否则会报错。
+          支持 obb / detect / seg（PolygonLabels）/ cls（Choices）。提交后请到「任务」页查看进度。
         </Elem>
 
         <Elem name="section">
@@ -572,11 +573,23 @@ const ConfigManagement = () => {
             </Elem>
             <Elem name="form-item">
               <Elem name="param-label">task_type 任务类型</Elem>
-              <select value={meta.task_type} onChange={(e) => setMeta({ ...meta, task_type: e.target.value })}>
+              <select
+                value={meta.task_type}
+                onChange={(e) => {
+                  const task_type = e.target.value;
+                  const defaults = {
+                    obb: { model_yaml: "yolov8x-obb", model_pt: "yolov8x-obb" },
+                    detect: { model_yaml: "yolov8x", model_pt: "yolov8x" },
+                    seg: { model_yaml: "yolov8-seg", model_pt: "yolov8x-seg" },
+                    cls: { model_yaml: "yolov8-cls", model_pt: "yolov8x-cls" },
+                  }[task_type] || {};
+                  setMeta({ ...meta, task_type, ...defaults });
+                }}
+              >
                 <option value="obb">obb 旋转检测</option>
                 <option value="detect">detect 目标检测</option>
-                <option value="cls">cls 分类</option>
-                <option value="seg">seg 分割</option>
+                <option value="cls">cls 分类（需 Choices 标注）</option>
+                <option value="seg">seg 分割（需 PolygonLabels）</option>
               </select>
             </Elem>
           </Elem>
@@ -584,10 +597,16 @@ const ConfigManagement = () => {
             <Elem name="form-item">
               <Elem name="param-label">model_yaml 模型结构</Elem>
               <input value={meta.model_yaml} onChange={(e) => setMeta({ ...meta, model_yaml: e.target.value })} />
+              <Elem name="hint" style={{ marginTop: 4 }}>
+                示例：obb→yolov8x-obb；detect→yolov8x；seg→yolov8-seg；cls→yolov8-cls
+              </Elem>
             </Elem>
             <Elem name="form-item">
               <Elem name="param-label">model_pt 预训练权重名</Elem>
               <input value={meta.model_pt} onChange={(e) => setMeta({ ...meta, model_pt: e.target.value })} />
+              <Elem name="hint" style={{ marginTop: 4 }}>
+                对应 .pt 名，如 yolov8x-seg / yolov8x-cls（不含后缀）
+              </Elem>
             </Elem>
             <Elem name="form-item">
               <Elem name="param-label">data_yaml 数据配置名(可空)</Elem>
@@ -600,6 +619,9 @@ const ConfigManagement = () => {
             placeholder="例如 blooming, seed"
             onChange={(e) => setMeta({ ...meta, classes: e.target.value })}
           />
+          <Elem name="hint" style={{ marginTop: 4 }}>
+            seg 项目请用 PolygonLabels；cls 项目请用 Choices，类别名须与这里完全一致。
+          </Elem>
         </Elem>
 
         <Elem name="section">
@@ -954,27 +976,43 @@ const TaskDetail = () => {
             <Elem name="empty">暂无模型</Elem>
           ) : (
             <Elem name="model-list">
-              {job.models.map((model) => (
-                <Elem name="model-card" key={model.id}>
-                  <Elem name="model-name">{model.name}</Elem>
-                  <Elem name="model-meta">{model.created_at} · {formatSize(model.file_size)}</Elem>
-                  {model.metrics && Object.keys(model.metrics).length > 0 && (
-                    <Elem name="model-meta">
-                      {["metrics/mAP50(B)", "metrics/mAP50-95(B)", "mAP50", "mAP50-95"]
-                        .filter((k) => model.metrics[k] != null)
-                        .map((k) => `${k}=${Number(model.metrics[k]).toFixed(4)}`)
-                        .join(" · ")}
+              {[...(job.models || [])]
+                .sort((a, b) => {
+                  const rank = (m) => (m.variant === "best" || /best/i.test(m.name || "") ? 0 : m.variant === "last" || /last/i.test(m.name || "") ? 1 : 2);
+                  return rank(a) - rank(b);
+                })
+                .map((model) => {
+                  const isBest = model.variant === "best" || /best/i.test(model.name || "");
+                  const isLast = model.variant === "last" || /last/i.test(model.name || "");
+                  const label = isBest ? "best（验证集最优）" : isLast ? "last（最后一轮）" : model.name;
+                  return (
+                    <Elem name="model-card" key={model.id}>
+                      <Elem name="model-name">{label}</Elem>
+                      <Elem name="model-meta">{model.name} · {model.created_at} · {formatSize(model.file_size)}</Elem>
+                      {model.metrics && Object.keys(model.metrics).length > 0 && (
+                        <Elem name="model-meta">
+                          {["metrics/mAP50(B)", "metrics/mAP50-95(B)", "mAP50", "mAP50-95", "metrics/accuracy_top1"]
+                            .filter((k) => model.metrics[k] != null)
+                            .map((k) => `${k}=${Number(model.metrics[k]).toFixed(4)}`)
+                            .join(" · ")}
+                        </Elem>
+                      )}
+                      <Space>
+                        <Button
+                          size="small"
+                          look={isBest ? "primary" : "outlined"}
+                          onClick={() => window.open(`/api/train/models/${model.id}/download`, "_blank")}
+                        >
+                          {isBest ? "下载 best" : isLast ? "下载 last" : "下载"}
+                        </Button>
+                      </Space>
                     </Elem>
-                  )}
-                  <Space>
-                    <Button size="small" look="outlined" onClick={() => window.open(`/api/train/models/${model.id}/download`, "_blank")}>下载</Button>
-                  </Space>
-                </Elem>
-              ))}
+                  );
+                })}
             </Elem>
           )}
           <Elem name="hint" style={{ marginTop: 8 }}>
-            如需删除模型以释放空间，请返回「任务」列表删除整个任务（会一并删除日志与全部模型文件）。
+            推理/部署建议优先用 best；last 为训练结束时的权重。删除请回「任务」列表删除整个任务。
           </Elem>
         </Elem>
 
