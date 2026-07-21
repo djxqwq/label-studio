@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useHistory } from "react-router";
 import { Button, Select } from "@humansignal/ui";
 import { Space } from "../../components/Space/Space";
@@ -51,10 +51,10 @@ const StartTrain = () => {
     api.callApi("trainConfigs", {}).then((res) => {
       setConfigs(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {});
-    api.callApi("trainStatus", { params: { pk: pageParams.pk } }).then((data) => {
+    api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
       setJobStatus(data?.status || "none");
     }).catch(() => {});
-  }, [pageParams.pk]);
+  }, [pageParams.id]);
 
   useEffect(() => {
     const cfg = configs.find((c) => c.name === configName);
@@ -73,10 +73,10 @@ const StartTrain = () => {
     setError("");
     try {
       await api.callApi("startTrain", {
-        params: { pk: pageParams.pk },
+        params: { pk: pageParams.id },
         body: { config_name: configName, epochs, batch, patience, imgsz, device },
       });
-      history.push(`/projects/${pageParams.pk}/train/progress`);
+      history.push(`/projects/${pageParams.id}/train/progress`);
     } catch (e) {
       setError(e?.response?.detail || e?.detail || "启动失败");
     } finally {
@@ -106,7 +106,7 @@ const StartTrain = () => {
               placeholder="-- 请选择 --"
               options={configOptions}
             />
-            <Button size="small" look="outlined" onClick={() => history.push(`/projects/${pageParams.pk}/train/configs`)}>
+            <Button size="small" look="outlined" onClick={() => history.push(`/projects/${pageParams.id}/train/configs`)}>
               + 新建
             </Button>
           </Elem>
@@ -166,7 +166,7 @@ const TrainProgress = () => {
     let mounted = true;
 
     const doPoll = () => {
-      api.callApi("trainStatus", { params: { pk: pageParams.pk } }).then((data) => {
+      api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
         if (!mounted) return;
         if (!data || data.status === "none") {
           setJobStatus("none");
@@ -183,10 +183,10 @@ const TrainProgress = () => {
     doPoll();
     pollingRef.current = setInterval(doPoll, 2000);
     return () => { mounted = false; if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [pageParams.pk]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pageParams.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopTraining = async () => {
-    await api.callApi("stopTrain", { params: { pk: pageParams.pk } });
+    await api.callApi("stopTrain", { params: { pk: pageParams.id } });
   };
 
   const getStatusClass = () => {
@@ -258,14 +258,14 @@ const TrainLogs = () => {
 
   useEffect(() => {
     const loadLogs = () => {
-      api.callApi("trainLogs", { params: { pk: pageParams.pk } }).then((data) => {
+      api.callApi("trainLogs", { params: { pk: pageParams.id } }).then((data) => {
         setLogs(Array.isArray(data) ? data : (data?.logs || []));
       }).catch(() => {});
     };
     loadLogs();
     const id = setInterval(loadLogs, 3000);
     return () => clearInterval(id);
-  }, [pageParams.pk]);
+  }, [pageParams.id]);
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -278,7 +278,7 @@ const TrainLogs = () => {
   );
 
   const clearLogs = async () => {
-    await api.callApi("clearTrainLogs", { params: { pk: pageParams.pk } });
+    await api.callApi("clearTrainLogs", { params: { pk: pageParams.id } });
     setLogs([]);
   };
 
@@ -326,22 +326,22 @@ const ModelManagement = () => {
 
   useEffect(() => {
     setLoading(true);
-    api.callApi("trainModels", { params: { pk: pageParams.pk } }).then((res) => {
+    api.callApi("trainModels", { params: { pk: pageParams.id } }).then((res) => {
       setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {}).finally(() => setLoading(false));
-  }, [pageParams.pk]);
+  }, [pageParams.id]);
 
   const deleteModel = async (modelId) => {
     if (!confirm("确定要删除这个模型吗？")) return;
-    await api.callApi("deleteModel", { params: { pk: pageParams.pk, mid: modelId } });
+    await api.callApi("deleteModel", { params: { pk: pageParams.id, mid: modelId } });
     setLoading(true);
-    api.callApi("trainModels", { params: { pk: pageParams.pk } }).then((res) => {
+    api.callApi("trainModels", { params: { pk: pageParams.id } }).then((res) => {
       setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {}).finally(() => setLoading(false));
   };
 
   const downloadModel = (model) => {
-    window.open(`/api/projects/${pageParams.pk}/train/models/${model.id}/download`);
+    window.open(`/api/projects/${pageParams.id}/train/models/${model.id}/download`);
   };
 
   return (
