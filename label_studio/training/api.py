@@ -458,7 +458,7 @@ class TrainJobListAPI(APIView):
 
 
 class TrainJobDetailAPI(APIView):
-    """GET /api/train/jobs/{job_id}"""
+    """GET/DELETE /api/train/jobs/{job_id}"""
     permission_required = all_permissions.projects_view
 
     def get(self, request, job_id):
@@ -475,6 +475,34 @@ class TrainJobDetailAPI(APIView):
         if not job:
             return Response({'error': '任务不存在'}, status=404)
         return Response(job.to_dict(detail=True))
+
+    def delete(self, request, job_id):
+        """删除任务及其日志、模型文件（释放磁盘）"""
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+
+        job = qs.filter(id=job_id).prefetch_related('models').first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+        if job.status in ('pending', 'building', 'training'):
+            return Response({'error': '任务仍在运行，请先停止再删除'}, status=400)
+
+        removed_files = 0
+        for m in job.models.all():
+            if m.file_path and os.path.exists(m.file_path):
+                try:
+                    os.remove(m.file_path)
+                    removed_files += 1
+                    parent = os.path.dirname(m.file_path)
+                    if parent and os.path.isdir(parent) and not os.listdir(parent):
+                        os.rmdir(parent)
+                except OSError:
+                    logger.exception('删除模型文件失败: %s', m.file_path)
+        job_id_val = job.id
+        job.delete()
+        return Response({'ok': True, 'deleted_job_id': job_id_val, 'removed_files': removed_files})
 
 
 class TrainJobLogsAPI(APIView):
@@ -561,21 +589,3 @@ class TrainModelDownloadAPI(APIView):
         if not m or not os.path.exists(m.file_path):
             return Response({'error': '模型文件不存在'}, status=404)
         return FileResponse(open(m.file_path, 'rb'), as_attachment=True, filename=m.name)
-
-
-class TrainModelDeleteAPI(APIView):
-    """DELETE /api/train/models/{mid}"""
-    permission_required = all_permissions.projects_change
-
-    def delete(self, request, mid):
-        try:
-            org = _active_org(request)
-        except ValueError as e:
-            return Response({'error': str(e)}, status=400)
-        m = TrainedModel.objects.filter(id=mid, job__organization=org).first()
-        if not m:
-            return Response({'error': '模型不存在'}, status=404)
-        if os.path.exists(m.file_path):
-            os.remove(m.file_path)
-        m.delete()
-        return Response({'ok': True})

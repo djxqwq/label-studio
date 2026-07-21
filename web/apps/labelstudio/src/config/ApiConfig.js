@@ -81,12 +81,12 @@ export const API_CONFIG = {
     startTrain: "POST:/train",
     trainJobs: "GET:/train/jobs",
     trainJobDetail: "GET:/train/jobs/:job_id",
+    deleteTrainJob: "DELETE:/train/jobs/:job_id",
     trainJobLogs: "GET:/train/jobs/:job_id/logs",
     clearTrainJobLogs: "DELETE:/train/jobs/:job_id/logs",
     stopTrainJob: "POST:/train/jobs/:job_id/stop",
     trainJobModels: "GET:/train/jobs/:job_id/models",
     downloadModel: "GET:/train/models/:mid/download",
-    deleteModel: "DELETE:/train/models/:mid",
 
     // Export
     export: "/projects/:pk/export",

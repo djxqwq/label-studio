@@ -370,74 +370,96 @@ const StartTrain = () => {
   );
 };
 
+const DEFAULT_META = {
+  name: "",
+  task_type: "obb",
+  model_yaml: "yolov8x-obb",
+  model_pt: "yolov8x-obb",
+  data_yaml: "",
+  classes: "object",
+};
+
+const applyConfigToForm = (config) => ({
+  meta: {
+    name: config?.name || "",
+    task_type: config?.task_type || "obb",
+    model_yaml: config?.model_yaml || "yolov8x-obb",
+    model_pt: config?.model_pt || "yolov8x-obb",
+    data_yaml: config?.data_yaml || "",
+    classes: Array.isArray(config?.classes) ? config.classes.join(", ") : (config?.classes || "object"),
+  },
+  trainParams: mergeParams(config?.train_params || config || {}),
+});
+
 const ConfigManagement = () => {
   const api = useAPI();
   const [configs, setConfigs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [meta, setMeta] = useState({
-    name: "",
-    task_type: "obb",
-    model_yaml: "yolov8x-obb",
-    model_pt: "yolov8x-obb",
-    data_yaml: "",
-    classes: "",
-  });
+  const [hint, setHint] = useState("");
+  const [meta, setMeta] = useState({ ...DEFAULT_META });
   const [trainParams, setTrainParams] = useState(mergeParams());
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const load = useCallback(() => {
-    api.callApi("trainConfigs", {}).then((res) => {
-      const list = Array.isArray(res) ? res : res?.data || res?.results || [];
-      setConfigs(list);
-      setSelectedId((prev) => {
-        const keep = list.find((c) => c.id === prev);
-        const target = keep || list[0];
-        if (!target) {
-          setMeta({ name: "", task_type: "obb", model_yaml: "yolov8x-obb", model_pt: "yolov8x-obb", data_yaml: "", classes: "" });
-          setTrainParams(mergeParams());
-          return null;
-        }
-        setMeta({
-          name: target.name || "",
-          task_type: target.task_type || "obb",
-          model_yaml: target.model_yaml || "yolov8x-obb",
-          model_pt: target.model_pt || "yolov8x-obb",
-          data_yaml: target.data_yaml || "",
-          classes: (target.classes || []).join(", "),
-        });
-        setTrainParams(mergeParams(target.train_params || target));
-        return target.id;
-      });
-    }).catch(() => {});
-  }, [api]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const filtered = configs.filter((c) =>
-    String(c.name || "").toLowerCase().includes(searchTerm.toLowerCase()),
-  );
-
-  const selectConfig = (config) => {
-    setSelectedId(config.id);
+  const fillForm = (config, creating = false, message = "") => {
+    const { meta: nextMeta, trainParams: nextParams } = applyConfigToForm(config);
+    setMeta(nextMeta);
+    setTrainParams(nextParams);
+    setIsCreating(creating);
+    setSelectedId(creating ? null : (config?.id ?? null));
     setError("");
-    setMeta({
-      name: config.name || "",
-      task_type: config.task_type || "obb",
-      model_yaml: config.model_yaml || "yolov8x-obb",
-      model_pt: config.model_pt || "yolov8x-obb",
-      data_yaml: config.data_yaml || "",
-      classes: (config.classes || []).join(", "),
-    });
-    setTrainParams(mergeParams(config.train_params || config));
+    setHint(message);
   };
 
-  const newConfig = () => {
-    setSelectedId(null);
-    setError("");
-    setMeta({ name: "", task_type: "obb", model_yaml: "yolov8x-obb", model_pt: "yolov8x-obb", data_yaml: "", classes: "" });
-    setTrainParams(mergeParams());
+  const load = useCallback(async () => {
+    try {
+      const res = await api.callApi("trainConfigs", {});
+      const list = Array.isArray(res) ? res : res?.data || res?.results || [];
+      setConfigs(list);
+      if (isCreating) return;
+      const keep = list.find((c) => c.id === selectedId);
+      const target = keep || list[0];
+      if (!target) {
+        fillForm({ ...DEFAULT_META, train_params: DEFAULT_TRAIN_PARAMS }, true, "暂无配置，已填入默认参数，请填写名称后保存。");
+        return;
+      }
+      fillForm(target, false, "");
+    } catch (e) {
+      // ignore
+    }
+  }, [api, isCreating, selectedId]);
+
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onSelectChange = (id) => {
+    const config = configs.find((c) => String(c.id) === String(id));
+    if (!config) return;
+    fillForm(config, false, "");
+  };
+
+  const startCreate = () => {
+    const base = configs.find((c) => c.id === selectedId) || configs[0];
+    const stamped = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+    if (base) {
+      fillForm(
+        {
+          ...base,
+          id: undefined,
+          name: `${base.name}-copy-${stamped}`,
+        },
+        true,
+        "新建模式：已基于当前配置预填全部参数，请修改名称/类别后保存。",
+      );
+    } else {
+      fillForm(
+        { ...DEFAULT_META, name: `custom-obb-${stamped}`, train_params: DEFAULT_TRAIN_PARAMS },
+        true,
+        "新建模式：已填入推荐默认超参，请补全名称与类别后保存。",
+      );
+    }
+    setShowAdvanced(false);
   };
 
   const saveConfig = async () => {
@@ -448,15 +470,31 @@ const ConfigManagement = () => {
       classes: meta.classes.split(",").map((c) => c.trim()).filter(Boolean),
       train_params: trainParams,
     };
+    if (!body.name?.trim()) {
+      setError("请填写配置名称");
+      setSaving(false);
+      return;
+    }
+    if (!body.classes.length) {
+      setError("请填写至少一个类别");
+      setSaving(false);
+      return;
+    }
     try {
-      const res = selectedId
-        ? await api.callApi("updateTrainConfig", { params: { config_id: selectedId }, body, suppressError: true, errorFilter: () => true })
-        : await api.callApi("createTrainConfig", { body, suppressError: true, errorFilter: () => true });
+      const res = isCreating || !selectedId
+        ? await api.callApi("createTrainConfig", { body, suppressError: true, errorFilter: () => true })
+        : await api.callApi("updateTrainConfig", { params: { config_id: selectedId }, body, suppressError: true, errorFilter: () => true });
       if (!res || res.error) {
         setError(res?.response?.error || res?.error || "保存失败");
         return;
       }
-      load();
+      setIsCreating(false);
+      setHint("保存成功");
+      const list = await api.callApi("trainConfigs", {});
+      const arr = Array.isArray(list) ? list : list?.data || list?.results || [];
+      setConfigs(arr);
+      const saved = arr.find((c) => c.id === res.id) || arr.find((c) => c.name === body.name) || arr[0];
+      if (saved) fillForm(saved, false, "保存成功");
     } catch (e) {
       setError(e?.message || "保存失败");
     } finally {
@@ -465,9 +503,11 @@ const ConfigManagement = () => {
   };
 
   const deleteConfig = async () => {
-    if (!selectedId || !confirm("确定删除该配置？")) return;
+    if (!selectedId || isCreating) return;
+    if (!confirm("确定删除该配置？此操作不可恢复。")) return;
     await api.callApi("deleteTrainConfig", { params: { config_id: selectedId } });
     setSelectedId(null);
+    setIsCreating(false);
     load();
   };
 
@@ -475,81 +515,137 @@ const ConfigManagement = () => {
     <Block name="training-page">
       <Elem name="panel" mod={{ wide: true }}>
         <Elem name="panel-title">配置管理</Elem>
-        <Elem name="hint">左侧选择配置，右侧编辑基础信息与全部训练超参。保存后可在「启动训练」中直接选用。</Elem>
+        <Elem name="hint">
+          用下拉框选择已有配置进行编辑；点「新建配置」会预填默认/当前参数，只需改名称和类别即可保存。
+        </Elem>
 
-        <Elem name="config-layout">
-          <Elem name="config-sidebar">
-            <Button size="small" look="primary" onClick={newConfig} style={{ width: "100%", marginBottom: 12 }}>
-              + 新建配置
-            </Button>
-            <input
-              type="text"
-              placeholder="搜索配置..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{ width: "100%", marginBottom: 10 }}
+        <Elem name="section">
+          <Elem name="label">选择配置</Elem>
+          <Elem name="select-row">
+            <Select
+              value={isCreating ? "" : (selectedId ?? "")}
+              onChange={onSelectChange}
+              searchable
+              searchPlaceholder="搜索配置..."
+              placeholder={isCreating ? "新建中（未保存）" : "请选择配置"}
+              disabled={isCreating}
+              options={configs.map((c) => ({
+                label: `${c.name} (${c.task_type})`,
+                value: c.id,
+              }))}
             />
-            <Elem name="config-list">
-              {filtered.map((c) => (
-                <Elem
-                  key={c.id}
-                  name="config-item"
-                  mod={{ selected: selectedId === c.id }}
-                  onClick={() => selectConfig(c)}
-                >
-                  <Elem name="config-name">{c.name}</Elem>
-                  <Elem name="config-type">{c.task_type}</Elem>
-                  <Elem name="config-classes">{(c.classes || []).join(", ")}</Elem>
+            <Button size="small" look="primary" onClick={startCreate}>新建配置</Button>
+            {!isCreating && selectedId && (
+              <Button size="small" look="negative" onClick={deleteConfig}>删除配置</Button>
+            )}
+            {isCreating && (
+              <Button
+                size="small"
+                look="outlined"
+                onClick={() => {
+                  const cur = configs.find((c) => c.id === selectedId) || configs[0];
+                  if (cur) fillForm(cur, false, "");
+                  else load();
+                }}
+              >
+                取消新建
+              </Button>
+            )}
+          </Elem>
+          {(hint || isCreating) && (
+            <Elem name="mode-banner" mod={{ creating: isCreating }}>
+              {hint || (isCreating ? "新建模式" : "")}
+            </Elem>
+          )}
+        </Elem>
+
+        <Elem name="section">
+          <Elem name="label">基础信息</Elem>
+          <Elem name="form-row">
+            <Elem name="form-item">
+              <Elem name="param-label">name 配置名称 *</Elem>
+              <input
+                value={meta.name}
+                placeholder="例如 jasmine-obb-v2"
+                onChange={(e) => setMeta({ ...meta, name: e.target.value })}
+              />
+            </Elem>
+            <Elem name="form-item">
+              <Elem name="param-label">task_type 任务类型</Elem>
+              <select value={meta.task_type} onChange={(e) => setMeta({ ...meta, task_type: e.target.value })}>
+                <option value="obb">obb 旋转检测</option>
+                <option value="detect">detect 目标检测</option>
+                <option value="cls">cls 分类</option>
+                <option value="seg">seg 分割</option>
+              </select>
+            </Elem>
+          </Elem>
+          <Elem name="form-row">
+            <Elem name="form-item">
+              <Elem name="param-label">model_yaml 模型结构</Elem>
+              <input value={meta.model_yaml} onChange={(e) => setMeta({ ...meta, model_yaml: e.target.value })} />
+            </Elem>
+            <Elem name="form-item">
+              <Elem name="param-label">model_pt 预训练权重名</Elem>
+              <input value={meta.model_pt} onChange={(e) => setMeta({ ...meta, model_pt: e.target.value })} />
+            </Elem>
+            <Elem name="form-item">
+              <Elem name="param-label">data_yaml 数据配置名(可空)</Elem>
+              <input value={meta.data_yaml} onChange={(e) => setMeta({ ...meta, data_yaml: e.target.value })} />
+            </Elem>
+          </Elem>
+          <Elem name="param-label">classes 类别(逗号分隔，须与项目标签一致) *</Elem>
+          <textarea
+            value={meta.classes}
+            placeholder="例如 blooming, seed"
+            onChange={(e) => setMeta({ ...meta, classes: e.target.value })}
+          />
+        </Elem>
+
+        <Elem name="section">
+          <Elem name="panel-header">
+            <Elem name="label" style={{ marginBottom: 0 }}>训练超参</Elem>
+            <Button size="small" look="outlined" onClick={() => setShowAdvanced((v) => !v)}>
+              {showAdvanced ? "收起高级参数" : "展开全部参数"}
+            </Button>
+          </Elem>
+          {!showAdvanced ? (
+            <Elem name="params-grid">
+              {[
+                ["epochs", "epochs 训练轮数"],
+                ["batch", "batch 批大小"],
+                ["patience", "patience 早停"],
+                ["imgsz", "imgsz 输入尺寸"],
+                ["device", "device 设备"],
+                ["lr0", "lr0 初始学习率"],
+              ].map(([key, label]) => (
+                <Elem name="param" key={key}>
+                  <Elem name="param-label">{label}</Elem>
+                  <Elem name="param-input">
+                    <input
+                      type={key === "device" ? "text" : "number"}
+                      step={key === "lr0" ? 0.0001 : 1}
+                      value={trainParams[key] ?? ""}
+                      onChange={(e) => {
+                        const val = key === "device" ? e.target.value : Number(e.target.value);
+                        setTrainParams((p) => ({ ...p, [key]: val }));
+                      }}
+                    />
+                  </Elem>
                 </Elem>
               ))}
             </Elem>
-          </Elem>
-
-          <Elem name="config-detail">
-            <Elem name="section">
-              <Elem name="label">基础信息</Elem>
-              <Elem name="form-row">
-                <Elem name="form-item">
-                  <Elem name="param-label">name 配置名称</Elem>
-                  <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} />
-                </Elem>
-                <Elem name="form-item">
-                  <Elem name="param-label">task_type 任务类型</Elem>
-                  <select value={meta.task_type} onChange={(e) => setMeta({ ...meta, task_type: e.target.value })}>
-                    <option value="obb">obb 旋转检测</option>
-                    <option value="detect">detect 目标检测</option>
-                    <option value="cls">cls 分类</option>
-                    <option value="seg">seg 分割</option>
-                  </select>
-                </Elem>
-              </Elem>
-              <Elem name="form-row">
-                <Elem name="form-item">
-                  <Elem name="param-label">model_yaml 模型结构</Elem>
-                  <input value={meta.model_yaml} onChange={(e) => setMeta({ ...meta, model_yaml: e.target.value })} />
-                </Elem>
-                <Elem name="form-item">
-                  <Elem name="param-label">model_pt 预训练权重名</Elem>
-                  <input value={meta.model_pt} onChange={(e) => setMeta({ ...meta, model_pt: e.target.value })} />
-                </Elem>
-                <Elem name="form-item">
-                  <Elem name="param-label">data_yaml 数据配置名(可空)</Elem>
-                  <input value={meta.data_yaml} onChange={(e) => setMeta({ ...meta, data_yaml: e.target.value })} />
-                </Elem>
-              </Elem>
-              <Elem name="param-label">classes 类别(逗号分隔，须与项目标签一致)</Elem>
-              <textarea value={meta.classes} onChange={(e) => setMeta({ ...meta, classes: e.target.value })} />
-            </Elem>
-
+          ) : (
             <ParamFields values={trainParams} onChange={(k, v) => setTrainParams((p) => ({ ...p, [k]: v }))} />
-
-            {error && <Elem name="error">{String(error)}</Elem>}
-            <Space style={{ marginTop: 16 }}>
-              {selectedId && <Button look="negative" onClick={deleteConfig}>删除配置</Button>}
-              <Button look="primary" waiting={saving} onClick={saveConfig}>保存配置</Button>
-            </Space>
-          </Elem>
+          )}
         </Elem>
+
+        {error && <Elem name="error">{String(error)}</Elem>}
+        <Space style={{ marginTop: 16 }}>
+          <Button look="primary" waiting={saving} onClick={saveConfig}>
+            {isCreating ? "创建并保存" : "保存修改"}
+          </Button>
+        </Space>
       </Elem>
     </Block>
   );
@@ -562,6 +658,7 @@ const TaskList = () => {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
   const [projectQuery, setProjectQuery] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -578,6 +675,30 @@ const TaskList = () => {
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
   }, [load]);
+
+  const deleteJob = async (e, job) => {
+    e.stopPropagation();
+    if (isRunningStatus(job.status)) {
+      alert("任务仍在运行，请先进入详情停止后再删除");
+      return;
+    }
+    if (!confirm(`确定删除任务 #${job.id}？\n将同时删除该任务的日志与全部模型文件，不可恢复。`)) return;
+    setDeletingId(job.id);
+    try {
+      const res = await api.callApi("deleteTrainJob", {
+        params: { job_id: job.id },
+        suppressError: true,
+        errorFilter: () => true,
+      });
+      if (!res || res.error) {
+        alert(res?.response?.error || res?.error || "删除失败");
+        return;
+      }
+      load();
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <Block name="training-page">
@@ -615,9 +736,20 @@ const TaskList = () => {
               >
                 <Elem name="job-card-top">
                   <Elem name="job-name">#{job.id} · {job.config_name}</Elem>
-                  <Elem name="status-badge" mod={{ [job.status]: true }}>
-                    {STATUS_LABEL[job.status] || job.status}
-                  </Elem>
+                  <Space>
+                    <Elem name="status-badge" mod={{ [job.status]: true }}>
+                      {STATUS_LABEL[job.status] || job.status}
+                    </Elem>
+                    <Button
+                      size="small"
+                      look="negative"
+                      waiting={deletingId === job.id}
+                      disabled={isRunningStatus(job.status)}
+                      onClick={(e) => deleteJob(e, job)}
+                    >
+                      删除
+                    </Button>
+                  </Space>
                 </Elem>
                 <Elem name="job-meta">项目：{(job.project_titles || []).join("、") || "—"}</Elem>
                 <Elem name="job-meta">
@@ -785,7 +917,10 @@ const TaskDetail = () => {
 
         {job.result && Object.keys(job.result).length > 0 && (
           <Elem name="section">
-            <Elem name="label">评估指标</Elem>
+            <Elem name="label">评估指标（用于判断模型是否有效）</Elem>
+            <Elem name="hint">
+              重点看 mAP50 / mAP50-95：数值越高越好。一般 mAP50 &gt; 0.5 可认为有一定检测能力；若接近 0 或训练失败无指标，说明模型基本无效。也可用下载的 .pt 在业务数据上做推理验证。
+            </Elem>
             <Elem name="metrics">
               {Object.entries(job.result).map(([key, val]) => (
                 <Elem name="metric-row" key={key}>
@@ -794,6 +929,12 @@ const TaskDetail = () => {
                 </Elem>
               ))}
             </Elem>
+          </Elem>
+        )}
+
+        {job.status === "completed" && (!job.result || !Object.keys(job.result).length) && (
+          <Elem name="hint">
+            训练已完成但缺少评估指标。请查看日志是否评估失败；可下载模型后在实际图片上试推理确认效果。
           </Elem>
         )}
 
@@ -807,24 +948,24 @@ const TaskDetail = () => {
                 <Elem name="model-card" key={model.id}>
                   <Elem name="model-name">{model.name}</Elem>
                   <Elem name="model-meta">{model.created_at} · {formatSize(model.file_size)}</Elem>
+                  {model.metrics && Object.keys(model.metrics).length > 0 && (
+                    <Elem name="model-meta">
+                      {["metrics/mAP50(B)", "metrics/mAP50-95(B)", "mAP50", "mAP50-95"]
+                        .filter((k) => model.metrics[k] != null)
+                        .map((k) => `${k}=${Number(model.metrics[k]).toFixed(4)}`)
+                        .join(" · ")}
+                    </Elem>
+                  )}
                   <Space>
                     <Button size="small" look="outlined" onClick={() => window.open(`/api/train/models/${model.id}/download`, "_blank")}>下载</Button>
-                    <Button
-                      size="small"
-                      look="negative"
-                      onClick={async () => {
-                        if (!confirm("确定删除该模型文件？")) return;
-                        await api.callApi("deleteModel", { params: { mid: model.id } });
-                        loadJob();
-                      }}
-                    >
-                      删除
-                    </Button>
                   </Space>
                 </Elem>
               ))}
             </Elem>
           )}
+          <Elem name="hint" style={{ marginTop: 8 }}>
+            如需删除模型以释放空间，请返回「任务」列表删除整个任务（会一并删除日志与全部模型文件）。
+          </Elem>
         </Elem>
 
         <Elem name="section">

@@ -31,11 +31,20 @@
     color: var(--color-neutral-content);
   }
 
-  &__hint {
-    margin: -8px 0 20px;
+  &__mode-banner {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 6px;
     font-size: 13px;
-    line-height: 1.5;
+    background: var(--color-neutral-surface);
     color: var(--color-neutral-content-subtle);
+    border: 1px solid var(--color-neutral-border);
+
+    &_creating {
+      background: var(--color-primary-emphasis-subtle);
+      color: var(--color-primary-content);
+      border-color: var(--color-primary-border, var(--color-primary-content));
+    }
   }
 
   &__section {
