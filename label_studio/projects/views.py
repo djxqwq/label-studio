@@ -16,3 +16,8 @@ def project_list(request):
 @login_required
 def project_settings(request, pk, sub_path):
     return render(request, 'projects/settings.html')
+
+
+@login_required
+def project_train(request, pk, sub_path=''):
+    return render(request, 'projects/list.html')

@@ -51,10 +51,10 @@ const StartTrain = () => {
     api.callApi("trainConfigs", {}).then((res) => {
       setConfigs(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {});
-    api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
+    api.callApi("trainStatus", { params: { pk: pageParams.pk } }).then((data) => {
       setJobStatus(data?.status || "none");
     }).catch(() => {});
-  }, [api, pageParams.id]);
+  }, [api, pageParams.pk]);
 
   useEffect(() => {
     const cfg = configs.find((c) => c.name === configName);
@@ -73,10 +73,10 @@ const StartTrain = () => {
     setError("");
     try {
       await api.callApi("startTrain", {
-        params: { pk: pageParams.id },
+        params: { pk: pageParams.pk },
         body: { config_name: configName, epochs, batch, patience, imgsz, device },
       });
-      history.push(`/projects/${pageParams.id}/train/progress`);
+      history.push(`/projects/${pageParams.pk}/train/progress`);
     } catch (e) {
       setError(e?.response?.detail || e?.detail || "启动失败");
     } finally {
@@ -106,7 +106,7 @@ const StartTrain = () => {
               placeholder="-- 请选择 --"
               options={configOptions}
             />
-            <Button size="small" look="outlined" onClick={() => history.push(`/projects/${pageParams.id}/train/configs`)}>
+            <Button size="small" look="outlined" onClick={() => history.push(`/projects/${pageParams.pk}/train/configs`)}>
               + 新建
             </Button>
           </Elem>
@@ -166,7 +166,7 @@ const TrainProgress = () => {
     let mounted = true;
 
     const doPoll = () => {
-      api.callApi("trainStatus", { params: { pk: pageParams.id } }).then((data) => {
+      api.callApi("trainStatus", { params: { pk: pageParams.pk } }).then((data) => {
         if (!mounted) return;
         if (!data || data.status === "none") {
           setJobStatus("none");
@@ -183,10 +183,10 @@ const TrainProgress = () => {
     doPoll();
     pollingRef.current = setInterval(doPoll, 2000);
     return () => { mounted = false; if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pageParams.pk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopTraining = async () => {
-    await api.callApi("stopTrain", { params: { pk: pageParams.id } });
+    await api.callApi("stopTrain", { params: { pk: pageParams.pk } });
   };
 
   const getStatusClass = () => {
@@ -257,10 +257,10 @@ const TrainLogs = () => {
   const logContainerRef = useRef(null);
 
   const loadLogs = useCallback(() => {
-    api.callApi("trainLogs", { params: { pk: pageParams.id } }).then((data) => {
+    api.callApi("trainLogs", { params: { pk: pageParams.pk } }).then((data) => {
       setLogs(Array.isArray(data) ? data : (data?.logs || []));
     }).catch(() => {});
-  }, [pageParams.id]);
+  }, [pageParams.pk]);
 
   useEffect(() => {
     loadLogs();
@@ -279,7 +279,7 @@ const TrainLogs = () => {
   );
 
   const clearLogs = async () => {
-    await api.callApi("clearTrainLogs", { params: { pk: pageParams.id } });
+    await api.callApi("clearTrainLogs", { params: { pk: pageParams.pk } });
     setLogs([]);
   };
 
@@ -327,10 +327,10 @@ const ModelManagement = () => {
 
   const loadModels = useCallback(() => {
     setLoading(true);
-    api.callApi("trainModels", { params: { pk: pageParams.id } }).then((res) => {
+    api.callApi("trainModels", { params: { pk: pageParams.pk } }).then((res) => {
       setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {}).finally(() => setLoading(false));
-  }, [pageParams.id]);
+  }, [pageParams.pk]);
 
   useEffect(() => {
     loadModels();
@@ -338,12 +338,12 @@ const ModelManagement = () => {
 
   const deleteModel = async (modelId) => {
     if (!confirm("确定要删除这个模型吗？")) return;
-    await api.callApi("deleteModel", { params: { pk: pageParams.id, mid: modelId } });
+    await api.callApi("deleteModel", { params: { pk: pageParams.pk, mid: modelId } });
     loadModels();
   };
 
   const downloadModel = (model) => {
-    window.open(`/api/projects/${pageParams.id}/train/models/${model.id}/download`);
+    window.open(`/api/projects/${pageParams.pk}/train/models/${model.id}/download`);
   };
 
   return (
