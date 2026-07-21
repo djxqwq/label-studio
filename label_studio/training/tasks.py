@@ -332,7 +332,16 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, task_type:
     if isinstance(train_kwargs.get('device'), str) and train_kwargs['device'].isdigit():
         train_kwargs['device'] = int(train_kwargs['device'])
 
+    # 隔离 Ultralytics 输出，避免写到 cwd/runs/obb/trainN，便于按任务删除
+    from .cleanup import job_runs_root
+    runs_root = job_runs_root(job.id)
+    os.makedirs(runs_root, exist_ok=True)
+    train_kwargs['project'] = runs_root
+    train_kwargs['name'] = task_type or 'train'
+    train_kwargs['exist_ok'] = True
+
     _log(job, f'data：{data_path}')
+    _log(job, f'runs 目录：{runs_root}/{train_kwargs["name"]}')
     _log(job, f'训练参数：{ {k: train_kwargs[k] for k in sorted(train_kwargs) if k != "data"} }')
     model.train(**train_kwargs)
 
@@ -417,6 +426,16 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, task_type:
             file_size=os.path.getsize(path),
             metrics={**(metrics or {}), 'variant': variant},
         )
+
+    # 记录可清理路径：删除任务时一并去掉 runs / trained_models
+    trainer_save = None
+    if trainer is not None:
+        trainer_save = getattr(trainer, 'save_dir', None)
+    artifacts['runs_dir'] = runs_root
+    if trainer_save:
+        artifacts['ultralytics_save_dir'] = str(trainer_save)
+    artifacts['trained_dir'] = save_dir
+
     job.result = metrics
     job.artifacts = artifacts
     job.save(update_fields=['result', 'artifacts', 'updated_at'])

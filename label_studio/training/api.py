@@ -653,7 +653,7 @@ class TrainJobDetailAPI(APIView):
         return Response(job.to_dict(detail=True))
 
     def delete(self, request, job_id):
-        """删除任务及其日志、模型文件（释放磁盘）"""
+        """删除任务及其日志、模型文件、Ultralytics runs（释放磁盘）"""
         try:
             qs, _ = _org_jobs(request)
         except ValueError as e:
@@ -665,34 +665,8 @@ class TrainJobDetailAPI(APIView):
         if job.status in ('pending', 'building', 'training'):
             return Response({'error': '任务仍在运行，请先停止再删除'}, status=400)
 
-        removed_files = 0
-        parent_dirs = set()
-        for m in job.models.all():
-            if m.file_path and os.path.exists(m.file_path):
-                try:
-                    os.remove(m.file_path)
-                    removed_files += 1
-                    parent = os.path.dirname(m.file_path)
-                    if parent:
-                        parent_dirs.add(parent)
-                except OSError:
-                    logger.exception('删除模型文件失败: %s', m.file_path)
-        for path in (job.artifacts or {}).values():
-            if path and os.path.isfile(path):
-                try:
-                    os.remove(path)
-                    removed_files += 1
-                    parent = os.path.dirname(path)
-                    if parent:
-                        parent_dirs.add(parent)
-                except OSError:
-                    logger.exception('删除训练产物失败: %s', path)
-        for parent in parent_dirs:
-            try:
-                if os.path.isdir(parent) and not os.listdir(parent):
-                    os.rmdir(parent)
-            except OSError:
-                pass
+        from .cleanup import cleanup_job_files
+        removed_files = cleanup_job_files(job)
         job_id_val = job.id
         job.delete()
         return Response({'ok': True, 'deleted_job_id': job_id_val, 'removed_files': removed_files})
