@@ -69,6 +69,17 @@ class ModelConfigListAPI(APIView):
 class ModelConfigDetailAPI(APIView):
     permission_required = all_permissions.projects_change
 
+    def put(self, request, config_id):
+        config = ModelConfig.objects.filter(id=config_id).first()
+        if not config:
+            return Response({'error': '配置不存在'}, status=404)
+        serializer = ModelConfigSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        for key, value in serializer.validated_data.items():
+            setattr(config, key, value)
+        config.save()
+        return Response(config.to_dict())
+
     def delete(self, request, config_id):
         config = ModelConfig.objects.filter(id=config_id).first()
         if not config:
@@ -221,7 +232,7 @@ class TrainStatusAPI(APIView):
 
 
 class TrainLogsAPI(APIView):
-    """GET /api/projects/{pk}/train/logs?since={n}"""
+    """GET/DELETE /api/projects/{pk}/train/logs"""
     permission_required = all_permissions.projects_view
 
     def get(self, request, pk):
@@ -231,6 +242,13 @@ class TrainLogsAPI(APIView):
         since = int(request.GET.get('since', 0))
         entries = job.logs.filter(id__gt=since).values('id', 'level', 'message', 'created_at')
         return Response({'logs': list(entries)})
+
+    def delete(self, request, pk):
+        """清空训练日志"""
+        job = TrainingJob.objects.filter(project_id=pk).order_by('-created_at').first()
+        if job:
+            job.logs.all().delete()
+        return Response({'ok': True})
 
 
 class TrainStopAPI(APIView):

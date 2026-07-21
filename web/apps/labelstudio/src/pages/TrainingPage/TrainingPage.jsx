@@ -278,7 +278,8 @@ const TrainLogs = () => {
     log.message?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const clearLogs = () => {
+  const clearLogs = async () => {
+    await api.callApi("clearTrainLogs", { params: { pk: pageParams.id } });
     setLogs([]);
   };
 
@@ -454,19 +455,30 @@ const ConfigManagement = () => {
   };
 
   const saveConfig = async () => {
-    await api.callApi("saveTrainConfig", {
-      body: {
-        ...formData,
-        classes: formData.classes.split(",").map((c) => c.trim()).filter(Boolean),
-      },
-    });
+    const body = {
+      ...formData,
+      classes: formData.classes.split(",").map((c) => c.trim()).filter(Boolean),
+    };
+    
+    // 判断是新建还是修改
+    if (selectedConfig?.id) {
+      // 修改现有配置 - 调用 PUT 更新
+      await api.callApi("updateTrainConfig", { 
+        params: { config_id: selectedConfig.id },
+        body 
+      });
+    } else {
+      // 新建配置 - 调用 POST 创建
+      await api.callApi("createTrainConfig", { body });
+    }
     loadConfigs();
   };
 
   const deleteConfig = async () => {
     if (!selectedConfig) return;
     if (!confirm("确定要删除这个配置吗？")) return;
-    await api.callApi("deleteTrainConfig", { params: { config_name: selectedConfig.name } });
+    // 删除配置用 deleteTrainConfig (DELETE)，参数是 config_id
+    await api.callApi("deleteTrainConfig", { params: { config_id: selectedConfig.id } });
     setSelectedConfig(null);
     loadConfigs();
   };

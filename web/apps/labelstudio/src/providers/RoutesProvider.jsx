@@ -48,7 +48,7 @@ export const RoutesProvider = ({ children }) => {
 
   const routesMap = useMemo(() => {
     return pageSetToRoutes(Pages, { config, store });
-  }, [location, config, store, history]);
+  }, [location, config, history]);
 
   const routesChain = useMemo(() => {
     return findMacthingComponents(location.pathname, routesMap);
