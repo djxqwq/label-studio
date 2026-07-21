@@ -138,6 +138,22 @@ def _param_or_default(params, key, default):
     return default if value is None else value
 
 
+def _find_images_root(export_dir):
+    img = os.path.join(export_dir, 'images')
+    if os.path.isdir(img):
+        return export_dir
+    classes = os.path.join(export_dir, 'classes')
+    if os.path.isdir(classes):
+        return export_dir
+    for item in os.listdir(export_dir):
+        p = os.path.join(export_dir, item)
+        if os.path.isdir(p) and (
+            os.path.isdir(os.path.join(p, 'images')) or os.path.isdir(os.path.join(p, 'classes'))
+        ):
+            return p
+    return None
+
+
 def _count_detect_images(root):
     img_dir = os.path.join(root, 'images')
     if not os.path.isdir(img_dir):
