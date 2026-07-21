@@ -871,7 +871,7 @@ export const TrainingPage = {
   layout: TrainingLayout,
   component: StartTrain,
   pages: {
-    start: { path: "/", component: StartTrain, exact: true },
+    // 注意：不要再挂 path:"/" 的 StartTrain，否则会与 component 重复渲染
     tasks: { title: "任务", path: "/tasks", component: TaskList, exact: true },
     taskDetail: { path: "/tasks/:jobId", component: TaskDetail, exact: true },
     configs: { title: "配置管理", path: "/configs", component: ConfigManagement, exact: true },

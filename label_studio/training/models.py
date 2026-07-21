@@ -8,7 +8,7 @@ User = get_user_model()
 
 
 class ModelConfig(models.Model):
-    """用户创建的模型配置（前端可增删，不碰代码）"""
+    """用户创建的模型配置（按组织隔离）"""
     TASK_CHOICES = [
         ('obb', 'OBB 旋转检测'),
         ('detect', '目标检测'),
@@ -16,7 +16,14 @@ class ModelConfig(models.Model):
         ('seg', '分割'),
     ]
 
-    name = models.CharField(max_length=255, unique=True)
+    organization = models.ForeignKey(
+        'organizations.Organization',
+        on_delete=models.CASCADE,
+        related_name='training_model_configs',
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=255)
     task_type = models.CharField(max_length=20, choices=TASK_CHOICES, default='obb')
     model_yaml = models.CharField(max_length=255, default='yolov8x-obb')
     model_pt = models.CharField(max_length=255, default='yolov8x-obb')
@@ -33,6 +40,7 @@ class ModelConfig(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        unique_together = [('organization', 'name')]
 
     def __str__(self):
         return self.name
@@ -45,6 +53,7 @@ class ModelConfig(models.Model):
         train_params = self.resolved_train_params()
         return {
             'id': self.id,
+            'organization_id': self.organization_id,
             'name': self.name,
             'task_type': self.task_type,
             'model_yaml': self.model_yaml,
@@ -61,7 +70,7 @@ class ModelConfig(models.Model):
 
 
 class TrainingJob(models.Model):
-    """训练任务记录（支持单项目或多项目合并训练集）"""
+    """训练任务记录（支持单/多项目，按组织隔离）"""
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('building', 'Building Dataset'),
@@ -71,7 +80,13 @@ class TrainingJob(models.Model):
         ('stopped', 'Stopped'),
     ]
 
-    # 旧单项目外键：保留兼容历史数据，新任务以 projects M2M 为准
+    organization = models.ForeignKey(
+        'organizations.Organization',
+        on_delete=models.CASCADE,
+        related_name='training_jobs',
+        null=True,
+        blank=True,
+    )
     project = models.ForeignKey(
         Project, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='training_jobs',
@@ -95,7 +110,6 @@ class TrainingJob(models.Model):
         ordering = ['-created_at']
 
     def get_projects(self):
-        """返回关联项目 queryset（优先 M2M，回退旧 FK）"""
         qs = self.projects.all()
         if qs.exists():
             return qs
@@ -104,12 +118,10 @@ class TrainingJob(models.Model):
         return Project.objects.none()
 
     def to_dict(self, detail=False):
-        project_list = [
-            {'id': p.id, 'title': p.title}
-            for p in self.get_projects()
-        ]
+        project_list = [{'id': p.id, 'title': p.title} for p in self.get_projects()]
         data = {
             'id': self.id,
+            'organization_id': self.organization_id,
             'task_id': str(self.task_id),
             'config_name': self.config_name,
             'status': self.status,
@@ -128,15 +140,14 @@ class TrainingJob(models.Model):
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M'),
         }
         if detail:
-            models = [m.to_dict() for m in self.models.all()]
-            data['models'] = models
-            data['model_count'] = len(models)
+            models_list = [m.to_dict() for m in self.models.all()]
+            data['models'] = models_list
+            data['model_count'] = len(models_list)
             data['log_count'] = self.logs.count()
         return data
 
 
 class TrainingLog(models.Model):
-    """训练日志行"""
     job = models.ForeignKey(TrainingJob, on_delete=models.CASCADE, related_name='logs')
     level = models.CharField(max_length=10, default='INFO')
     message = models.TextField()
@@ -155,7 +166,6 @@ class TrainingLog(models.Model):
 
 
 class TrainedModel(models.Model):
-    """训练完成的模型文件"""
     job = models.ForeignKey(TrainingJob, on_delete=models.CASCADE, related_name='models')
     name = models.CharField(max_length=255)
     file_path = models.CharField(max_length=1024)

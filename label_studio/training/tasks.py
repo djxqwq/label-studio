@@ -201,14 +201,22 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, **params):
 
     from .params import merge_train_params, BLOCKED_TRAIN_KEYS
     train_kwargs = merge_train_params(params)
-    train_kwargs['data'] = data_path
-    train_kwargs['device'] = device
-    train_kwargs['epochs'] = epochs
-    # 去掉不应传给 train() 的业务字段
+    # 先清掉禁止覆盖 / 业务字段，再写入真正的 data 路径（切勿先写后删）
     for key in list(train_kwargs.keys()):
         if key in BLOCKED_TRAIN_KEYS or key in ('project_ids',):
             train_kwargs.pop(key, None)
 
+    if not os.path.isfile(data_path):
+        raise FileNotFoundError(f'数据集配置不存在：{data_path}，请确认 build_dataset 已成功生成 data.yaml')
+
+    train_kwargs['data'] = data_path
+    train_kwargs['device'] = device
+    train_kwargs['epochs'] = epochs
+    # 部分环境 device='0' 需转 int
+    if isinstance(train_kwargs.get('device'), str) and train_kwargs['device'].isdigit():
+        train_kwargs['device'] = int(train_kwargs['device'])
+
+    _log(job, f'data.yaml：{data_path}')
     _log(job, f'训练参数：{ {k: train_kwargs[k] for k in sorted(train_kwargs) if k != "data"} }')
     model.train(**train_kwargs)
 

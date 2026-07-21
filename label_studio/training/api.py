@@ -50,31 +50,54 @@ _DEFAULT_CONFIGS = [
     ("diantou-obb", "obb", "yolov8x-obb", "yolov8x-obb", ["diantou"]),
 ]
 
-_SEED_DONE = False
+_SEED_ORGS = set()
 _SEED_LOCK = threading.Lock()
 
 
+def _active_org(request):
+    org = getattr(request.user, 'active_organization', None)
+    if not org:
+        raise ValueError('当前用户未加入组织')
+    return org
+
+
 def _seed_defaults(request):
-    global _SEED_DONE
-    if _SEED_DONE:
+    """为当前组织种子默认配置（仅该组织缺失时创建）"""
+    try:
+        org = _active_org(request)
+    except ValueError:
+        return
+    org_id = org.id
+    if org_id in _SEED_ORGS:
         return
     with _SEED_LOCK:
-        if _SEED_DONE:
+        if org_id in _SEED_ORGS:
             return
         if not request.user.is_authenticated:
             return
         try:
             for name, task_type, yaml, pt, classes in _DEFAULT_CONFIGS:
                 ModelConfig.objects.update_or_create(
+                    organization=org,
                     name=name,
                     defaults=dict(
                         task_type=task_type, model_yaml=yaml, model_pt=pt,
                         classes=classes, created_by=request.user,
                     ),
                 )
-            _SEED_DONE = True
+            _SEED_ORGS.add(org_id)
         except Exception:
             logger.exception('seed default model configs failed')
+
+
+def _org_configs(request):
+    org = _active_org(request)
+    return ModelConfig.objects.filter(organization=org), org
+
+
+def _org_jobs(request):
+    org = _active_org(request)
+    return TrainingJob.objects.filter(organization=org), org
 
 
 def _project_label_names(project):
@@ -277,14 +300,26 @@ class ModelConfigListAPI(APIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request):
-        _seed_defaults(request)
-        return Response([c.to_dict() for c in ModelConfig.objects.all()])
+        try:
+            _seed_defaults(request)
+            qs, _ = _org_configs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        return Response([c.to_dict() for c in qs])
 
     def post(self, request):
+        try:
+            qs, org = _org_configs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
         serializer = ModelConfigSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         fields = serializer.to_model_fields()
-        config = ModelConfig.objects.create(created_by=request.user, **fields)
+        if qs.filter(name=fields['name']).exists():
+            return Response({'error': f'配置名已存在: {fields["name"]}'}, status=400)
+        config = ModelConfig.objects.create(
+            organization=org, created_by=request.user, **fields,
+        )
         return Response(config.to_dict(), status=status.HTTP_201_CREATED)
 
 
@@ -292,19 +327,29 @@ class ModelConfigDetailAPI(APIView):
     permission_required = all_permissions.projects_change
 
     def put(self, request, config_id):
-        config = ModelConfig.objects.filter(id=config_id).first()
+        try:
+            qs, _ = _org_configs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        config = qs.filter(id=config_id).first()
         if not config:
             return Response({'error': '配置不存在'}, status=404)
         serializer = ModelConfigSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         fields = serializer.to_model_fields(existing=config.to_dict())
+        if qs.filter(name=fields['name']).exclude(id=config.id).exists():
+            return Response({'error': f'配置名已存在: {fields["name"]}'}, status=400)
         for key, value in fields.items():
             setattr(config, key, value)
         config.save()
         return Response(config.to_dict())
 
     def delete(self, request, config_id):
-        config = ModelConfig.objects.filter(id=config_id).first()
+        try:
+            qs, _ = _org_configs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        config = qs.filter(id=config_id).first()
         if not config:
             return Response({'error': '配置不存在'}, status=404)
         config.delete()
@@ -312,27 +357,36 @@ class ModelConfigDetailAPI(APIView):
 
 
 class TrainStartAPI(APIView):
-    """POST /api/train — 启动训练（可多项目）"""
+    """POST /api/train — 启动训练（可多项目，限当前组织）"""
     permission_required = all_permissions.projects_change
 
     def post(self, request):
+        try:
+            org = _active_org(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+
         serializer = TrainRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         config_name = data['config_name']
         project_ids = list(dict.fromkeys(data['project_ids']))
 
-        config = ModelConfig.objects.filter(name=config_name).first()
+        config = ModelConfig.objects.filter(organization=org, name=config_name).first()
         if not config:
             return Response({'error': f'未知模型: {config_name}'}, status=400)
 
-        projects = list(Project.objects.filter(id__in=project_ids))
+        projects = list(Project.objects.filter(
+            id__in=project_ids, organization=org,
+        ))
         found_ids = {p.id for p in projects}
         missing = [pid for pid in project_ids if pid not in found_ids]
         if missing:
-            return Response({'error': f'项目不存在: {missing}'}, status=400)
+            return Response(
+                {'error': f'项目不存在或不属于当前组织: {missing}'},
+                status=400,
+            )
 
-        # 保持请求顺序
         projects = sorted(projects, key=lambda p: project_ids.index(p.id))
 
         try:
@@ -352,6 +406,7 @@ class TrainStartAPI(APIView):
         params['project_ids'] = project_ids
 
         job = TrainingJob.objects.create(
+            organization=org,
             project=projects[0],
             created_by=request.user,
             config_name=config_name,
@@ -366,13 +421,18 @@ class TrainStartAPI(APIView):
 
 
 class TrainJobListAPI(APIView):
-    """GET /api/train/jobs — 全站任务列表（所有人可见）"""
+    """GET /api/train/jobs — 当前组织任务列表（组织内全员可见）"""
     permission_required = all_permissions.projects_view
 
     def get(self, request):
         from django.db.models import Q
 
-        qs = TrainingJob.objects.all().prefetch_related('projects', 'models').select_related('created_by')
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+
+        qs = qs.prefetch_related('projects', 'models').select_related('created_by')
         status_filter = request.GET.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -402,8 +462,12 @@ class TrainJobDetailAPI(APIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request, job_id):
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
         job = (
-            TrainingJob.objects.filter(id=job_id)
+            qs.filter(id=job_id)
             .prefetch_related('projects', 'models')
             .select_related('created_by')
             .first()
@@ -418,7 +482,11 @@ class TrainJobLogsAPI(APIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request, job_id):
-        job = TrainingJob.objects.filter(id=job_id).first()
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        job = qs.filter(id=job_id).first()
         if not job:
             return Response({'error': '任务不存在'}, status=404)
         since = int(request.GET.get('since', 0))
@@ -434,7 +502,11 @@ class TrainJobLogsAPI(APIView):
         return Response({'logs': entries, 'job_id': job.id, 'status': job.status})
 
     def delete(self, request, job_id):
-        job = TrainingJob.objects.filter(id=job_id).first()
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        job = qs.filter(id=job_id).first()
         if not job:
             return Response({'error': '任务不存在'}, status=404)
         job.logs.all().delete()
@@ -446,7 +518,11 @@ class TrainJobStopAPI(APIView):
     permission_required = all_permissions.projects_change
 
     def post(self, request, job_id):
-        job = TrainingJob.objects.filter(id=job_id).first()
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        job = qs.filter(id=job_id).first()
         if not job:
             return Response({'error': '任务不存在'}, status=404)
         if job.status not in ('pending', 'building', 'training'):
@@ -462,7 +538,11 @@ class TrainJobModelsAPI(APIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request, job_id):
-        job = TrainingJob.objects.filter(id=job_id).first()
+        try:
+            qs, _ = _org_jobs(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        job = qs.filter(id=job_id).first()
         if not job:
             return Response({'error': '任务不存在'}, status=404)
         return Response([m.to_dict() for m in job.models.all()])
@@ -473,7 +553,11 @@ class TrainModelDownloadAPI(APIView):
     permission_required = all_permissions.projects_view
 
     def get(self, request, mid):
-        m = TrainedModel.objects.filter(id=mid).first()
+        try:
+            org = _active_org(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        m = TrainedModel.objects.filter(id=mid, job__organization=org).first()
         if not m or not os.path.exists(m.file_path):
             return Response({'error': '模型文件不存在'}, status=404)
         return FileResponse(open(m.file_path, 'rb'), as_attachment=True, filename=m.name)
@@ -484,7 +568,11 @@ class TrainModelDeleteAPI(APIView):
     permission_required = all_permissions.projects_change
 
     def delete(self, request, mid):
-        m = TrainedModel.objects.filter(id=mid).first()
+        try:
+            org = _active_org(request)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=400)
+        m = TrainedModel.objects.filter(id=mid, job__organization=org).first()
         if not m:
             return Response({'error': '模型不存在'}, status=404)
         if os.path.exists(m.file_path):
