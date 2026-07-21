@@ -1,5 +1,6 @@
 """训练管理 API（全局，支持多项目合并训练集）"""
 import io
+import json
 import logging
 import os
 import shutil
@@ -137,7 +138,125 @@ def _param_or_default(params, key, default):
     return default if value is None else value
 
 
-def _find_images_root(export_dir):
+def _count_detect_images(root):
+    img_dir = os.path.join(root, 'images')
+    if not os.path.isdir(img_dir):
+        return 0, 0
+    imgs = [f for f in os.listdir(img_dir) if os.path.isfile(os.path.join(img_dir, f))]
+    lbl_dir = os.path.join(root, 'labels')
+    paired = 0
+    if os.path.isdir(lbl_dir):
+        for name in imgs:
+            stem = os.path.splitext(name)[0]
+            if os.path.isfile(os.path.join(lbl_dir, f'{stem}.txt')):
+                paired += 1
+    return len(imgs), paired
+
+
+def _count_cls_images(root):
+    classes_root = os.path.join(root, 'classes')
+    if not os.path.isdir(classes_root):
+        return 0
+    total = 0
+    for dirpath, _, files in os.walk(classes_root):
+        total += len([f for f in files if os.path.isfile(os.path.join(dirpath, f))])
+    return total
+
+
+def _load_export_class_map(root):
+    """从 notes.json / classes.txt 读取导出时的 id->name"""
+    notes = os.path.join(root, 'notes.json')
+    if os.path.isfile(notes):
+        try:
+            with open(notes, encoding='utf-8') as f:
+                data = json.load(f)
+            cats = data.get('categories') or []
+            mapping = {}
+            for c in cats:
+                if isinstance(c, dict) and 'id' in c and 'name' in c:
+                    mapping[int(c['id'])] = str(c['name'])
+            if mapping:
+                return mapping
+        except Exception:
+            logger.debug('read notes.json failed: %s', notes, exc_info=True)
+
+    classes_file = os.path.join(root, 'classes.txt')
+    if os.path.isfile(classes_file):
+        mapping = {}
+        with open(classes_file, encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                name = line.strip()
+                if name:
+                    mapping[i] = name
+        return mapping
+    return {}
+
+
+def _remap_yolo_label_ids(root, class_names):
+    """把各项目导出的 class id 统一映射到 ModelConfig.classes 顺序。
+
+    Label Studio 导出默认按标签名字母序分配 id，可能与配置 classes 顺序不一致；
+    多项目合并前必须统一，否则同类目标 id 错乱。
+    """
+    if not class_names:
+        return 0
+    target = {str(n): i for i, n in enumerate(class_names)}
+    old_map = _load_export_class_map(root)
+    if not old_map:
+        logger.warning('导出目录无 classes 映射，跳过重映射: %s', root)
+        return 0
+
+    # old_id -> new_id
+    id_map = {}
+    for old_id, name in old_map.items():
+        if name not in target:
+            raise ValueError(
+                f'导出类别「{name}」不在配置 classes={list(class_names)} 中，无法合并'
+            )
+        id_map[int(old_id)] = target[name]
+
+    labels_dir = os.path.join(root, 'labels')
+    if not os.path.isdir(labels_dir):
+        return 0
+
+    rewritten = 0
+    for name in os.listdir(labels_dir):
+        if not name.endswith('.txt'):
+            continue
+        path = os.path.join(labels_dir, name)
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        new_lines = []
+        changed = False
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            try:
+                old_id = int(float(parts[0]))
+            except (ValueError, IndexError):
+                new_lines.append(line)
+                continue
+            if old_id not in id_map:
+                raise ValueError(f'标签文件 {name} 含未知 class id={old_id}，已知={sorted(id_map)}')
+            new_id = id_map[old_id]
+            if new_id != old_id:
+                changed = True
+            parts[0] = str(new_id)
+            new_lines.append(' '.join(parts))
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(new_lines))
+            if new_lines:
+                f.write('\n')
+        if changed:
+            rewritten += 1
+
+    # 重写 classes.txt 为配置顺序
+    with open(os.path.join(root, 'classes.txt'), 'w', encoding='utf-8') as f:
+        for n in class_names:
+            f.write(f'{n}\n')
+    return rewritten
     img = os.path.join(export_dir, 'images')
     if os.path.isdir(img):
         return export_dir
@@ -330,6 +449,23 @@ def _export_one_project(request, project, config, tmp_root):
     root = _find_images_root(project_dir)
     if not root:
         raise RuntimeError(f'项目「{project.title}」导出结构不完整（缺少 images）')
+
+    # 统一 class id → ModelConfig.classes 顺序，保证多项目合并后标注一致
+    if config.task_type != 'cls':
+        _remap_yolo_label_ids(root, config.classes or [])
+        n_img, n_paired = _count_detect_images(root)
+        logger.info(
+            'project export ok: id=%s title=%s images=%s paired=%s',
+            project.id, project.title, n_img, n_paired,
+        )
+        if n_img == 0:
+            raise ValueError(f'项目「{project.title}」导出后没有图片（可能图片下载失败）')
+        if n_paired == 0:
+            raise ValueError(f'项目「{project.title}」导出后没有可配对的 labels')
+    else:
+        n_cls = _count_cls_images(root)
+        logger.info('project cls export ok: id=%s title=%s images=%s', project.id, project.title, n_cls)
+
     return root
 
 
@@ -393,12 +529,34 @@ def _do_multi_project_export(request, projects, config):
     os.makedirs(tmp_root, exist_ok=True)
     work_dir = tempfile.mkdtemp(dir=tmp_root, prefix='ls_train_multi_')
     source_roots = []
+    per_project = []
     try:
         for project in projects:
-            source_roots.append(_export_one_project(request, project, config, tmp_root))
+            root = _export_one_project(request, project, config, tmp_root)
+            source_roots.append(root)
+            if config.task_type == 'cls':
+                n = _count_cls_images(root)
+                per_project.append({'id': project.id, 'title': project.title, 'images': n, 'paired': n})
+            else:
+                n_img, n_paired = _count_detect_images(root)
+                per_project.append({
+                    'id': project.id, 'title': project.title,
+                    'images': n_img, 'paired': n_paired,
+                })
         merge_dir = os.path.join(work_dir, 'merged')
         count = _merge_export_dirs(source_roots, merge_dir, task_type=config.task_type)
-        logger.info('multi export merged %s images from %s projects into %s', count, len(projects), merge_dir)
+        # 把统计写入 merge_dir 旁，供训练线程打日志
+        stats = {
+            'projects': per_project,
+            'merged_images': count,
+            'project_count': len(projects),
+        }
+        with open(os.path.join(work_dir, 'export_stats.json'), 'w', encoding='utf-8') as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+        logger.info(
+            'multi export merged %s images from %s projects into %s | detail=%s',
+            count, len(projects), merge_dir, per_project,
+        )
         return merge_dir, work_dir
     except Exception:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -423,6 +581,23 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                 return
 
             data_name = config.data_yaml or config.name
+            # 训练日志里打印各项目导出数量，便于核对「是否用上全部标注图」
+            stats_path = os.path.join(os.path.dirname(export_dir.rstrip('/\\')), 'export_stats.json')
+            if os.path.isfile(stats_path):
+                try:
+                    with open(stats_path, encoding='utf-8') as f:
+                        stats = json.load(f)
+                    from .tasks import _log as train_log
+                    train_log(job, f"多项目导出统计：共 {stats.get('project_count')} 个项目，合并后图片 {stats.get('merged_images')} 张")
+                    for p in stats.get('projects') or []:
+                        train_log(
+                            job,
+                            f"  - 项目「{p.get('title')}」(#{p.get('id')}): "
+                            f"图片={p.get('images')}，可配对标签={p.get('paired')}",
+                        )
+                except Exception:
+                    logger.exception('read export_stats failed')
+
             _, data_ref = build_dataset(
                 export_dir, data_name, config.task_type, config.classes, job_id=job.id,
             )

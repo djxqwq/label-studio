@@ -72,7 +72,8 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
             img_count += sum(1 for f in files if f.lower().endswith(IMAGE_EXTS))
         if img_count < 2:
             raise ValueError(f'有效图片过少（{img_count}），至少需要 2 张才能划分训练/验证集')
-        split_cls_dataset(export_dir, dst)
+        # 全部样本进入 train+val，不预留闲置 test
+        split_cls_dataset(export_dir, dst, train_ratio=0.85, valid_ratio=0.15, test_ratio=0.0)
         return dst, dst
 
     # detect / obb / seg
@@ -100,7 +101,7 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     if img_count < 2:
         raise ValueError(f'有效图片过少（{img_count}），至少需要 2 张才能划分训练/验证集')
 
-    split_dataset(export_dir, dst)
+    split_dataset(export_dir, dst, train_ratio=0.85, valid_ratio=0.15, test_ratio=0.0)
 
     yaml_path = os.path.join(_PROJ_ROOT, 'cfg', 'datasets', f'{yaml_stem}.yaml')
     dst_safe = dst.replace('\\', '/')
@@ -227,20 +228,14 @@ def _download_model_weights(model_name: str, dest_dir: str) -> str:
     return str(dest_path)
 
 
-def _resolve_model_yaml_path(model_yaml: str) -> str:
-    """解析模型 yaml；支持 yolov8x-cls -> yolov8-cls.yaml 这类带尺度前缀的名字。"""
-    direct = os.path.join(_PROJ_ROOT, 'cfg', 'models', 'v8', f'{model_yaml}.yaml')
-    if os.path.isfile(direct):
-        return direct
-    # yolov8n-cls / yolov8x-seg / yolov8s-obb -> yolov8-cls / yolov8-seg / yolov8-obb
+def _extract_model_scale(model_yaml: str, model_pt: str) -> str:
+    """从 yaml/pt 名解析尺度字母 n/s/m/l/x，默认 x（与业务常用 yolov8x-* 一致）。"""
     import re
-    m = re.match(r'^(yolov\d+)[nsmlx]-(.+)$', model_yaml)
-    if m:
-        base = f'{m.group(1)}-{m.group(2)}'
-        candidate = os.path.join(_PROJ_ROOT, 'cfg', 'models', 'v8', f'{base}.yaml')
-        if os.path.isfile(candidate):
-            return candidate
-    return direct
+    for name in (model_yaml or '', model_pt or ''):
+        m = re.search(r'yolov\d+([nsmlx])(?:-|$)|yolo\d+([nsmlx])(?:-|$)', name, re.I)
+        if m:
+            return (m.group(1) or m.group(2)).lower()
+    return 'x'
 
 
 def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, task_type: str = 'obb', **params):
@@ -262,18 +257,25 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, task_type:
     _log(job, f'权重目录：{_models_dir}')
     _log(job, f'目录内容：{os.listdir(_models_dir) if os.path.exists(_models_dir) else "不存在"}')
 
-    model_yaml_path = _resolve_model_yaml_path(model_yaml)
     model_pt_path = os.path.join(_models_dir, f'{model_pt}.pt')
+    scale = _extract_model_scale(model_yaml, model_pt)
 
-    _log(job, f'加载模型：{model_yaml} / {model_pt} (task={task_type})')
-    _log(job, f'yaml={model_yaml_path}')
+    _log(job, f'加载模型：{model_yaml} / {model_pt} (task={task_type}, scale={scale})')
     _log(job, f'权重路径：{model_pt_path}')
 
     def _load_model(pt_path):
-        if os.path.isfile(model_yaml_path):
-            return YOLO(model_yaml_path).load(pt_path)
-        _log(job, f'yaml 不存在，直接用权重加载：{pt_path}', level='WARNING')
-        return YOLO(pt_path)
+        """优先用 .pt 构建（结构与权重一致）；避免 YOLO(yolov8-obb.yaml) 丢尺度变成 n。"""
+        if os.path.isfile(pt_path):
+            _log(job, f'使用权重文件构建模型（保留 {scale} 结构）：{pt_path}')
+            return YOLO(pt_path)
+        # 无本地 pt 时：用「带尺度的名字」让 Ultralytics 解析，不要传基座 yaml 绝对路径
+        yaml_name = model_yaml if model_yaml.endswith('.yaml') else f'{model_yaml}.yaml'
+        # 若用户写的是 yolov8-obb，补上尺度 → yolov8x-obb.yaml
+        import re
+        if re.match(r'^yolov\d+-(obb|seg|cls|pose)?\.yaml$', yaml_name) and scale:
+            yaml_name = yaml_name.replace('yolov8-', f'yolov8{scale}-').replace('yolov5-', f'yolov5{scale}-')
+        _log(job, f'按名称构建结构：{yaml_name}')
+        return YOLO(yaml_name)
 
     if os.path.exists(model_pt_path):
         _log(job, f'使用本地权重：{model_pt_path}')

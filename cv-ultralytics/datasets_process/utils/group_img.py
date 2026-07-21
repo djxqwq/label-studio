@@ -61,13 +61,20 @@ def split_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.8, valid_ra
     if total_data < 2:
         raise ValueError(f'可配对样本过少（{total_data}），至少需要 2 张')
 
-    train_size = int(total_data * train_ratio)
-    valid_size = max(1, int(total_data * valid_ratio))
-    test_size = total_data - train_size - valid_size
-
-    if test_size < 0:
-        train_size += test_size
+    if test_ratio <= 0:
+        # 全部进入 train+valid，不闲置 test
+        train_size = int(total_data * train_ratio)
+        if train_size >= total_data:
+            train_size = total_data - 1
+        valid_size = total_data - train_size
         test_size = 0
+    else:
+        train_size = int(total_data * train_ratio)
+        valid_size = max(1, int(total_data * valid_ratio))
+        test_size = total_data - train_size - valid_size
+        if test_size < 0:
+            train_size += test_size
+            test_size = 0
 
     log.info("---------- 分组统计 ----------")
     log.info(f"数据集总量：{total_data}")
@@ -118,7 +125,7 @@ def split_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.8, valid_ra
     ))
 
 
-def split_cls_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.8, valid_ratio: float = 0.15, test_ratio: float = 0.05):
+def split_cls_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.85, valid_ratio: float = 0.15, test_ratio: float = 0.0):
     """
     划分分类数据集为 ImageFolder 结构：
       src:  classes/<class_name>/*.jpg
@@ -145,12 +152,19 @@ def split_cls_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.8, vali
 
     random.shuffle(samples)
     total = len(samples)
-    train_size = int(total * train_ratio)
-    valid_size = max(1, int(total * valid_ratio))
-    test_size = total - train_size - valid_size
-    if test_size < 0:
-        train_size += test_size
+    if test_ratio <= 0:
+        train_size = int(total * train_ratio)
+        if train_size >= total:
+            train_size = total - 1
+        valid_size = total - train_size
         test_size = 0
+    else:
+        train_size = int(total * train_ratio)
+        valid_size = max(1, int(total * valid_ratio))
+        test_size = total - train_size - valid_size
+        if test_size < 0:
+            train_size += test_size
+            test_size = 0
 
     splits = {
         'train': samples[:train_size],
