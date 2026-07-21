@@ -54,7 +54,7 @@ const StartTrain = () => {
     api.callApi("trainStatus", { params: { pk: pageParams.pk } }).then((data) => {
       setJobStatus(data?.status || "none");
     }).catch(() => {});
-  }, [api, pageParams.pk]);
+  }, [pageParams.pk]);
 
   useEffect(() => {
     const cfg = configs.find((c) => c.name === configName);
@@ -256,17 +256,16 @@ const TrainLogs = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const logContainerRef = useRef(null);
 
-  const loadLogs = useCallback(() => {
-    api.callApi("trainLogs", { params: { pk: pageParams.pk } }).then((data) => {
-      setLogs(Array.isArray(data) ? data : (data?.logs || []));
-    }).catch(() => {});
-  }, [pageParams.pk]);
-
   useEffect(() => {
+    const loadLogs = () => {
+      api.callApi("trainLogs", { params: { pk: pageParams.pk } }).then((data) => {
+        setLogs(Array.isArray(data) ? data : (data?.logs || []));
+      }).catch(() => {});
+    };
     loadLogs();
     const id = setInterval(loadLogs, 3000);
     return () => clearInterval(id);
-  }, [loadLogs]);
+  }, [pageParams.pk]);
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -325,21 +324,20 @@ const ModelManagement = () => {
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const loadModels = useCallback(() => {
+  useEffect(() => {
     setLoading(true);
     api.callApi("trainModels", { params: { pk: pageParams.pk } }).then((res) => {
       setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
     }).catch(() => {}).finally(() => setLoading(false));
   }, [pageParams.pk]);
 
-  useEffect(() => {
-    loadModels();
-  }, [loadModels]);
-
   const deleteModel = async (modelId) => {
     if (!confirm("确定要删除这个模型吗？")) return;
     await api.callApi("deleteModel", { params: { pk: pageParams.pk, mid: modelId } });
-    loadModels();
+    setLoading(true);
+    api.callApi("trainModels", { params: { pk: pageParams.pk } }).then((res) => {
+      setModels(Array.isArray(res) ? res : (res?.data || res?.results || []));
+    }).catch(() => {}).finally(() => setLoading(false));
   };
 
   const downloadModel = (model) => {
@@ -409,7 +407,7 @@ const ConfigManagement = () => {
   });
   const initDoneRef = useRef(false);
 
-  const loadConfigs = useCallback(() => {
+  useEffect(() => {
     api.callApi("trainConfigs", {}).then((res) => {
       const list = Array.isArray(res) ? res : (res?.data || res?.results || []);
       setConfigs(list);
@@ -429,11 +427,7 @@ const ConfigManagement = () => {
         });
       }
     }).catch(() => {});
-  }, [api]);
-
-  useEffect(() => {
-    loadConfigs();
-  }, [loadConfigs]);
+  }, []);
 
   const filteredConfigs = configs.filter((c) =>
     c.name?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -471,7 +465,11 @@ const ConfigManagement = () => {
       // 新建配置 - 调用 POST 创建
       await api.callApi("createTrainConfig", { body });
     }
-    loadConfigs();
+    // 重新加载配置列表
+    api.callApi("trainConfigs", {}).then((res) => {
+      const list = Array.isArray(res) ? res : (res?.data || res?.results || []);
+      setConfigs(list);
+    }).catch(() => {});
   };
 
   const deleteConfig = async () => {
@@ -480,7 +478,27 @@ const ConfigManagement = () => {
     // 删除配置用 deleteTrainConfig (DELETE)，参数是 config_id
     await api.callApi("deleteTrainConfig", { params: { config_id: selectedConfig.id } });
     setSelectedConfig(null);
-    loadConfigs();
+    // 重新加载配置列表
+    api.callApi("trainConfigs", {}).then((res) => {
+      const list = Array.isArray(res) ? res : (res?.data || res?.results || []);
+      setConfigs(list);
+      if (list.length > 0) {
+        setSelectedConfig(list[0]);
+        setFormData({
+          name: list[0].name,
+          task_type: list[0].task_type,
+          pretrained: list[0].pretrained || "",
+          classes: list[0].classes?.join(", ") || "",
+          epochs: list[0].epochs || 1000,
+          batch: list[0].batch || 16,
+          patience: list[0].patience || 200,
+          imgsz: list[0].imgsz || 640,
+          device: list[0].device || "0",
+        });
+      } else {
+        setFormData({ name: "", task_type: "obb", pretrained: "", classes: "", epochs: 1000, batch: 16, patience: 200, imgsz: 640, device: "0" });
+      }
+    }).catch(() => {});
   };
 
   const newConfig = () => {
