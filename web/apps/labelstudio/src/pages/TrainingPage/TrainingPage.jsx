@@ -505,7 +505,7 @@ const ConfigManagement = () => {
       const list = Array.isArray(res) ? res : res?.data || res?.results || [];
       setConfigs(list);
       if (isCreating) return;
-      const keep = list.find((c) => c.id === selectedId);
+      const keep = list.find((c) => String(c.id) === String(selectedId));
       const target = keep || list[0];
       if (!target) {
         fillForm({ ...DEFAULT_META, train_params: DEFAULT_TRAIN_PARAMS }, true, "暂无配置，已填入默认参数，请填写名称后保存。");
@@ -590,8 +590,10 @@ const ConfigManagement = () => {
       const list = await api.callApi("trainConfigs", {});
       const arr = Array.isArray(list) ? list : list?.data || list?.results || [];
       setConfigs(arr);
-      const savedId = res.id || selectedId;
-      const saved = arr.find((c) => c.id === savedId) || arr.find((c) => c.name === body.name) || arr[0];
+      const savedId = res.id ?? selectedId;
+      const saved = arr.find((c) => String(c.id) === String(savedId))
+        || arr.find((c) => c.name === body.name)
+        || arr[0];
       if (saved) fillForm(saved, false, "保存成功");
     } catch (e) {
       setError(e?.message || "保存失败");

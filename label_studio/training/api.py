@@ -758,6 +758,9 @@ class ModelConfigDetailAPI(APIView):
         config.save()
         return Response(config.to_dict())
 
+    def patch(self, request, config_id):
+        return self.put(request, config_id)
+
     def delete(self, request, config_id):
         try:
             qs, _ = _org_configs(request)

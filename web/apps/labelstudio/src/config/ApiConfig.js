@@ -76,7 +76,7 @@ export const API_CONFIG = {
     // Training (global, multi-project)
     trainConfigs: "GET:/train/configs",
     createTrainConfig: "POST:/train/configs",
-    updateTrainConfig: "PUT:/train/configs/:config_id",
+    updateTrainConfig: "PATCH:/train/configs/:config_id",
     deleteTrainConfig: "DELETE:/train/configs/:config_id",
     startTrain: "POST:/train",
     trainWeights: "GET:/train/weights",

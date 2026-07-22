@@ -323,6 +323,7 @@ export class APIProxy<T extends {}> {
   getDefaultHeaders(method: RequestMethod) {
     switch (method) {
       case "POST":
+      case "PUT":
       case "PATCH":
       case "DELETE": {
         return {
