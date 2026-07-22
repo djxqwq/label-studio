@@ -79,6 +79,7 @@ export const API_CONFIG = {
     updateTrainConfig: "PUT:/train/configs/:config_id",
     deleteTrainConfig: "DELETE:/train/configs/:config_id",
     startTrain: "POST:/train",
+    trainWeights: "GET:/train/weights",
     trainJobs: "GET:/train/jobs",
     trainJobDetail: "GET:/train/jobs/:job_id",
     deleteTrainJob: "DELETE:/train/jobs/:job_id",

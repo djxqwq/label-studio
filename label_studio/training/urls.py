@@ -10,6 +10,8 @@ urlpatterns = [
             api.ModelConfigDetailAPI.as_view(), name='train-config-detail'),
     # 启动训练
     path('api/train', api.TrainStartAPI.as_view(), name='train-start'),
+    # 预训练权重列表（本地 + 可选尺度）
+    path('api/train/weights', api.TrainWeightsAPI.as_view(), name='train-weights'),
     # 任务
     path('api/train/jobs', api.TrainJobListAPI.as_view(), name='train-jobs'),
     re_path(r'^api/train/jobs/(?P<job_id>\d+)/?$',

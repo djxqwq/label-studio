@@ -598,12 +598,12 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
 
             data_name = config.data_yaml or config.name
             # 训练日志里打印各项目导出数量，便于核对「是否用上全部标注图」
+            from .tasks import _log as train_log
             stats_path = os.path.join(os.path.dirname(export_dir.rstrip('/\\')), 'export_stats.json')
             if os.path.isfile(stats_path):
                 try:
                     with open(stats_path, encoding='utf-8') as f:
                         stats = json.load(f)
-                    from .tasks import _log as train_log
                     train_log(job, f"多项目导出统计：共 {stats.get('project_count')} 个项目，合并后图片 {stats.get('merged_images')} 张")
                     for p in stats.get('projects') or []:
                         train_log(
@@ -613,6 +613,7 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                         )
                 except Exception:
                     logger.exception('read export_stats failed')
+            train_log(job, f"使用权重：{config.model_pt}.pt（yaml={config.model_yaml}）")
 
             _, data_ref = build_dataset(
                 export_dir, data_name, config.task_type, config.classes, job_id=job.id,
@@ -661,6 +662,19 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                     logger.exception('删除 data.yaml 失败: %s', data_yaml_path)
 
     threading.Thread(target=_train, daemon=True).start()
+
+
+class TrainWeightsAPI(APIView):
+    """GET /api/train/weights?task_type=obb&version=8 — 本地权重 + 可选尺度目录"""
+    permission_required = all_permissions.projects_view
+
+    def get(self, request):
+        from .weights import weights_api_payload
+        task_type = request.GET.get('task_type') or 'obb'
+        version = request.GET.get('version') or '8'
+        if task_type not in ('detect', 'obb', 'seg', 'cls'):
+            return Response({'error': f'不支持的 task_type: {task_type}'}, status=400)
+        return Response(weights_api_payload(task_type=task_type, version=version))
 
 
 class ModelConfigListAPI(APIView):
@@ -766,11 +780,29 @@ class TrainStartAPI(APIView):
             return Response({'error': f'导出失败: {e}'}, status=500)
 
         from .params import extract_train_params_from_config, merge_train_params
+        from types import SimpleNamespace
+
         params = merge_train_params(
             extract_train_params_from_config(config),
             serializer.validated_train_params(),
         )
         params['project_ids'] = project_ids
+
+        model_names = serializer.resolved_model_names(config.task_type)
+        params['model_pt'] = model_names['model_pt']
+        params['model_yaml'] = model_names['model_yaml']
+        params['yolo_version'] = data.get('yolo_version') or '8'
+        params['yolo_scale'] = data.get('yolo_scale') or 'x'
+
+        runtime_config = SimpleNamespace(
+            name=config.name,
+            task_type=config.task_type,
+            classes=config.classes,
+            data_yaml=config.data_yaml,
+            model_yaml=model_names['model_yaml'],
+            model_pt=model_names['model_pt'],
+            epochs=config.epochs,
+        )
 
         job = TrainingJob.objects.create(
             organization=org,
@@ -783,7 +815,7 @@ class TrainStartAPI(APIView):
         )
         job.projects.set(projects)
 
-        _start_train_thread(job, config, params, export_dir, cleanup_dir)
+        _start_train_thread(job, runtime_config, params, export_dir, cleanup_dir)
         return Response(job.to_dict(detail=True), status=status.HTTP_201_CREATED)
 
 

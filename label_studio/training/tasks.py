@@ -124,108 +124,13 @@ names:
 
 
 def _weight_mirror_urls(model_name: str):
-    """国内优先的权重镜像列表（可用 YOLO_WEIGHTS_MIRRORS 覆盖，逗号分隔，支持 {name}/{file}/{github}）"""
-    filename = f'{model_name}.pt'
-    github = f'https://github.com/ultralytics/assets/releases/download/v8.2.0/{filename}'
-    custom = os.environ.get('YOLO_WEIGHTS_MIRRORS', '').strip()
-    if custom:
-        urls = []
-        for tmpl in custom.split(','):
-            tmpl = tmpl.strip()
-            if not tmpl:
-                continue
-            urls.append(
-                tmpl.replace('{name}', model_name)
-                .replace('{file}', filename)
-                .replace('{github}', github)
-            )
-        return urls
-
-    return [
-        f'https://ghfast.top/{github}',
-        f'https://mirror.ghproxy.com/{github}',
-        f'https://gh-proxy.com/{github}',
-        f'https://gitdl.cn/{github}',
-        f'https://ghproxy.net/{github}',
-        f'https://hf-mirror.com/Ultralytics/YOLOv8/resolve/main/{filename}',
-        f'https://huggingface.co/Ultralytics/YOLOv8/resolve/main/{filename}',
-        f'https://ultralytics.com/assets/{filename}',
-        github,
-    ]
+    from .weights import weight_mirror_urls
+    return weight_mirror_urls(model_name)
 
 
 def _download_model_weights(model_name: str, dest_dir: str) -> str:
-    """并行竞速下载权重：哪个镜像先下完且文件有效就用哪个。"""
-    import tempfile
-    import threading
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from pathlib import Path
-
-    import requests
-
-    dest_path = Path(dest_dir) / f'{model_name}.pt'
-    if dest_path.exists() and dest_path.stat().st_size > 1_000_000:
-        return str(dest_path)
-
-    os.makedirs(dest_dir, exist_ok=True)
-    mirrors = _weight_mirror_urls(model_name)
-    stop_event = threading.Event()
-    errors = []
-    min_bytes = 1_000_000
-
-    def _one(url):
-        if stop_event.is_set():
-            return None
-        tmp = None
-        try:
-            with requests.get(url, timeout=(8, 120), stream=True, allow_redirects=True) as resp:
-                if resp.status_code != 200:
-                    raise RuntimeError(f'HTTP {resp.status_code}')
-                fd, tmp = tempfile.mkstemp(suffix='.pt', dir=dest_dir)
-                os.close(fd)
-                size = 0
-                with open(tmp, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=1024 * 256):
-                        if stop_event.is_set():
-                            raise RuntimeError('cancelled')
-                        if chunk:
-                            f.write(chunk)
-                            size += len(chunk)
-                if size < min_bytes:
-                    raise RuntimeError(f'file too small ({size} bytes)')
-                return tmp, url, size
-        except Exception as e:
-            errors.append(f'{url}: {e}')
-            if tmp and os.path.exists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-            return None
-
-    winners = []
-    with ThreadPoolExecutor(max_workers=min(6, len(mirrors))) as pool:
-        futures = [pool.submit(_one, u) for u in mirrors]
-        for fut in as_completed(futures):
-            result = fut.result()
-            if result:
-                stop_event.set()
-                winners.append(result)
-                break
-
-    if not winners:
-        raise RuntimeError(
-            f'无法下载 {model_name}.pt，已尝试 {len(mirrors)} 个源。\n'
-            f'可设置环境变量 YOLO_WEIGHTS_MIRRORS 自定义镜像。\n'
-            f'或手动放到 {dest_dir}\n'
-            f'错误摘要：{errors[:5]}'
-        )
-
-    tmp, url, size = winners[0]
-    if dest_path.exists():
-        dest_path.unlink(missing_ok=True)
-    shutil.move(tmp, dest_path)
-    return str(dest_path)
+    from .weights import download_model_weights
+    return download_model_weights(model_name, dest_dir=dest_dir)
 
 
 def _extract_model_scale(model_yaml: str, model_pt: str) -> str:
@@ -283,7 +188,7 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, task_type:
     else:
         _log(job, f'本地权重不存在，尝试下载 {model_pt}.pt ...')
         try:
-            downloaded = _download_model_weights(model_pt, _models_dir)
+            downloaded = _download_model_weights(model_pt, _models_dir, log_fn=_log)
             _log(job, f'下载成功：{downloaded}')
             model = _load_model(downloaded)
         except RuntimeError as e:

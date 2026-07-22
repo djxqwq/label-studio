@@ -17,6 +17,13 @@ class TrainRequestSerializer(serializers.Serializer):
     patience = serializers.IntegerField(required=False, min_value=1)
     imgsz = serializers.IntegerField(required=False, min_value=32)
     device = serializers.CharField(required=False, allow_blank=True)
+    # 启动页选择 YOLO 版本/尺寸（覆盖配置里的 model_pt/yaml）
+    yolo_version = serializers.ChoiceField(choices=['8'], required=False, default='8')
+    yolo_scale = serializers.ChoiceField(
+        choices=['n', 's', 'm', 'l', 'x'], required=False, default='x',
+    )
+    model_pt = serializers.CharField(required=False, allow_blank=True)
+    model_yaml = serializers.CharField(required=False, allow_blank=True)
 
     def validated_train_params(self):
         data = self.validated_data
@@ -25,6 +32,25 @@ class TrainRequestSerializer(serializers.Serializer):
             if k in data
         }
         return merge_train_params(data.get('train_params') or {}, legacy)
+
+    def resolved_model_names(self, task_type: str):
+        """根据版本/尺寸/任务类型生成 model_pt / model_yaml；显式传入优先。"""
+        from .weights import build_model_names
+        data = self.validated_data
+        if data.get('model_pt'):
+            pt = data['model_pt']
+            if pt.endswith('.pt'):
+                pt = pt[:-3]
+            yaml = data.get('model_yaml') or pt
+            if yaml.endswith('.yaml'):
+                yaml = yaml[:-5]
+            return {'model_pt': pt, 'model_yaml': yaml, 'stem': pt}
+        names = build_model_names(
+            data.get('yolo_version') or '8',
+            data.get('yolo_scale') or 'x',
+            task_type,
+        )
+        return names
 
 
 class ModelConfigSerializer(serializers.Serializer):

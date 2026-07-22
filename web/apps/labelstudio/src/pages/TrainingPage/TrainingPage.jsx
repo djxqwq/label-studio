@@ -233,6 +233,15 @@ const StartTrain = () => {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
+  const [yoloVersion, setYoloVersion] = useState("8");
+  const [yoloScale, setYoloScale] = useState("x");
+  const [weightInfo, setWeightInfo] = useState(null);
+
+  const selectedConfig = useMemo(
+    () => configs.find((c) => c.name === configName) || null,
+    [configs, configName],
+  );
+  const taskType = selectedConfig?.task_type || "obb";
 
   useEffect(() => {
     api.callApi("trainConfigs", {}).then((res) => {
@@ -256,6 +265,25 @@ const StartTrain = () => {
     if (cfg) setTrainParams(mergeParams(cfg.train_params || cfg));
   }, [configName, configs]);
 
+  useEffect(() => {
+    if (!taskType) return;
+    api.callApi("trainWeights", {
+      params: { task_type: taskType, version: yoloVersion },
+    }).then((data) => {
+      setWeightInfo(data);
+      const opt = (data?.options || []).find((o) => o.scale === yoloScale);
+      if (!opt && data?.options?.length) {
+        // keep scale if valid; else default x
+        const has = data.options.some((o) => o.scale === yoloScale);
+        if (!has) setYoloScale("x");
+      }
+    }).catch(() => setWeightInfo(null));
+  }, [api, taskType, yoloVersion, yoloScale]);
+
+  const selectedWeight = useMemo(() => {
+    return (weightInfo?.options || []).find((o) => o.scale === yoloScale) || null;
+  }, [weightInfo, yoloScale]);
+
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase();
     if (!q) return projects;
@@ -278,6 +306,8 @@ const StartTrain = () => {
           config_name: configName,
           project_ids: selectedProjectIds,
           train_params: trainParams,
+          yolo_version: yoloVersion,
+          yolo_scale: yoloScale,
         },
         suppressError: true,
         errorFilter: () => true,
@@ -301,7 +331,8 @@ const StartTrain = () => {
         <Elem name="panel-title">启动训练</Elem>
         <Elem name="hint">
           选择配置与一个/多个项目合并训练。项目标签类别必须与配置 classes 完全一致，否则会报错。
-          支持 obb / detect / seg（PolygonLabels）/ cls（Choices）。提交后请到「任务」页查看进度。
+          任务类型（detect/obb/seg/cls）随配置自动确定；下方选择 YOLO 版本与尺寸档位。
+          本地有预训练权重则直接使用，没有则走国内镜像竞速下载。
         </Elem>
 
         <Elem name="section">
@@ -321,6 +352,50 @@ const StartTrain = () => {
             <Button size="small" look="outlined" onClick={() => history.push("/projects/train/configs")}>
               去配置管理
             </Button>
+          </Elem>
+        </Elem>
+
+        <Elem name="section">
+          <Elem name="label">YOLO 预训练权重</Elem>
+          <Elem name="form-row">
+            <Elem name="form-item">
+              <Elem name="param-label">任务类型（由配置自动带出）</Elem>
+              <input value={taskType} disabled readOnly />
+            </Elem>
+            <Elem name="form-item">
+              <Elem name="param-label">YOLO 版本</Elem>
+              <select value={yoloVersion} onChange={(e) => setYoloVersion(e.target.value)}>
+                {(weightInfo?.versions || ["8"]).map((v) => (
+                  <option key={v} value={v}>YOLOv{v}</option>
+                ))}
+              </select>
+            </Elem>
+            <Elem name="form-item">
+              <Elem name="param-label">尺寸档位</Elem>
+              <select value={yoloScale} onChange={(e) => setYoloScale(e.target.value)}>
+                {(weightInfo?.scales || [
+                  { value: "n", label: "n" },
+                  { value: "s", label: "s" },
+                  { value: "m", label: "m" },
+                  { value: "l", label: "l" },
+                  { value: "x", label: "x" },
+                ]).map((s) => (
+                  <option key={s.value} value={s.value}>{s.label || s.value}</option>
+                ))}
+              </select>
+            </Elem>
+          </Elem>
+          <Elem name="hint" style={{ marginTop: 8 }}>
+            {selectedWeight ? (
+              <>
+                将使用 <strong>{selectedWeight.filename}</strong>
+                {selectedWeight.local
+                  ? `（本地已有${selectedWeight.size_mb != null ? `，${selectedWeight.size_mb} MB` : ""}，直接加载）`
+                  : "（本地没有，启动后将从国内镜像竞速下载）"}
+              </>
+            ) : (
+              "选择版本与档位后显示权重文件名"
+            )}
           </Elem>
         </Elem>
 
