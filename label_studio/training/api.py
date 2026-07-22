@@ -78,7 +78,8 @@ def _seed_defaults(request):
             return
         try:
             for name, task_type, yaml, pt, classes in _DEFAULT_CONFIGS:
-                ModelConfig.objects.update_or_create(
+                # 只用 get_or_create：已有同名配置绝不覆盖用户修改
+                ModelConfig.objects.get_or_create(
                     organization=org,
                     name=name,
                     defaults=dict(
@@ -727,7 +728,8 @@ class ModelConfigListAPI(APIView):
 
 
 class ModelConfigDetailAPI(APIView):
-    permission_required = all_permissions.projects_change
+    # 与创建配置权限一致，避免「能新建不能改」
+    permission_required = all_permissions.projects_view
 
     def put(self, request, config_id):
         try:
@@ -738,8 +740,17 @@ class ModelConfigDetailAPI(APIView):
         if not config:
             return Response({'error': '配置不存在'}, status=404)
         serializer = ModelConfigSerializer(data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        fields = serializer.to_model_fields(existing=config.to_dict())
+        if not serializer.is_valid():
+            return Response({'error': serializer.errors}, status=400)
+        try:
+            fields = serializer.to_model_fields(existing=config.to_dict())
+        except Exception as e:
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+            from rest_framework import serializers as drf_serializers
+            if isinstance(e, (drf_serializers.ValidationError, DRFValidationError)):
+                detail = getattr(e, 'detail', None) or (e.args[0] if e.args else str(e))
+                return Response({'error': detail}, status=400)
+            raise
         if qs.filter(name=fields['name']).exclude(id=config.id).exists():
             return Response({'error': f'配置名已存在: {fields["name"]}'}, status=400)
         for key, value in fields.items():

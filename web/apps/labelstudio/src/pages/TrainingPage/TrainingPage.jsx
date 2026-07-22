@@ -548,6 +548,17 @@ const ConfigManagement = () => {
     setShowAdvanced(false);
   };
 
+  const formatSaveError = (res) => {
+    const raw = res?.response?.error || res?.error || res?.response || res;
+    if (!raw) return "保存失败";
+    if (typeof raw === "string") return raw;
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return "保存失败";
+    }
+  };
+
   const saveConfig = async () => {
     setSaving(true);
     setError("");
@@ -570,8 +581,8 @@ const ConfigManagement = () => {
       const res = isCreating || !selectedId
         ? await api.callApi("createTrainConfig", { body, suppressError: true, errorFilter: () => true })
         : await api.callApi("updateTrainConfig", { params: { config_id: selectedId }, body, suppressError: true, errorFilter: () => true });
-      if (!res || res.error) {
-        setError(res?.response?.error || res?.error || "保存失败");
+      if (!res || res.error || res.status >= 400 || (res.$meta && res.$meta.status >= 400)) {
+        setError(formatSaveError(res));
         return;
       }
       setIsCreating(false);
@@ -579,7 +590,8 @@ const ConfigManagement = () => {
       const list = await api.callApi("trainConfigs", {});
       const arr = Array.isArray(list) ? list : list?.data || list?.results || [];
       setConfigs(arr);
-      const saved = arr.find((c) => c.id === res.id) || arr.find((c) => c.name === body.name) || arr[0];
+      const savedId = res.id || selectedId;
+      const saved = arr.find((c) => c.id === savedId) || arr.find((c) => c.name === body.name) || arr[0];
       if (saved) fillForm(saved, false, "保存成功");
     } catch (e) {
       setError(e?.message || "保存失败");
