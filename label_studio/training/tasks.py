@@ -128,9 +128,9 @@ def _weight_mirror_urls(model_name: str):
     return weight_mirror_urls(model_name)
 
 
-def _download_model_weights(model_name: str, dest_dir: str) -> str:
+def _download_model_weights(model_name: str, dest_dir: str, log_fn=None) -> str:
     from .weights import download_model_weights
-    return download_model_weights(model_name, dest_dir=dest_dir)
+    return download_model_weights(model_name, dest_dir=dest_dir, log_fn=log_fn)
 
 
 def _extract_model_scale(model_yaml: str, model_pt: str) -> str:
@@ -193,7 +193,9 @@ def run_training(job, model_yaml: str, model_pt: str, data_yaml: str, task_type:
     else:
         _log(job, f'本地权重不存在，尝试下载 {model_pt}.pt ...')
         try:
-            downloaded = _download_model_weights(model_pt, _models_dir, log_fn=_log)
+            downloaded = _download_model_weights(
+                model_pt, _models_dir, log_fn=lambda msg: _log(job, msg),
+            )
             _log(job, f'下载成功：{downloaded}')
             model = _load_model(downloaded)
         except RuntimeError as e:
