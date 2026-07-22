@@ -597,26 +597,43 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
                 return
 
             data_name = config.data_yaml or config.name
-            # 训练日志里打印各项目导出数量，便于核对「是否用上全部标注图」
+            # 训练日志：任务概览 + 各项目导出数量 + 划分详情
             from .tasks import _log as train_log
+            project_ids = (params or {}).get('project_ids') or []
+            train_log(job, '======== 训练任务开始 ========')
+            train_log(
+                job,
+                f'任务 #{job.id} | 配置={config.name} | 类型={config.task_type} | '
+                f'类别={list(config.classes or [])}',
+            )
+            train_log(
+                job,
+                f'预训练：{config.model_pt}.pt | 项目数={len(project_ids)} | '
+                f'epochs={params.get("epochs")} batch={params.get("batch")} imgsz={params.get("imgsz")}',
+            )
             stats_path = os.path.join(os.path.dirname(export_dir.rstrip('/\\')), 'export_stats.json')
             if os.path.isfile(stats_path):
                 try:
                     with open(stats_path, encoding='utf-8') as f:
                         stats = json.load(f)
-                    train_log(job, f"多项目导出统计：共 {stats.get('project_count')} 个项目，合并后图片 {stats.get('merged_images')} 张")
+                    train_log(job, '-------- 导出统计 --------')
+                    train_log(
+                        job,
+                        f'共 {stats.get("project_count")} 个项目，合并后图片 {stats.get("merged_images")} 张',
+                    )
                     for p in stats.get('projects') or []:
                         train_log(
                             job,
-                            f"  - 项目「{p.get('title')}」(#{p.get('id')}): "
-                            f"图片={p.get('images')}，可配对标签={p.get('paired')}",
+                            f'  - 项目「{p.get("title")}」(#{p.get("id")})：'
+                            f'图片 {p.get("images")} 张，可配对标签 {p.get("paired")}',
                         )
                 except Exception:
                     logger.exception('read export_stats failed')
-            train_log(job, f"使用权重：{config.model_pt}.pt（yaml={config.model_yaml}）")
 
+            train_log(job, '-------- 数据集划分 --------')
             _, data_ref = build_dataset(
-                export_dir, data_name, config.task_type, config.classes, job_id=job.id,
+                export_dir, data_name, config.task_type, config.classes,
+                job_id=job.id, log_fn=lambda msg: train_log(job, msg),
             )
             job.status = 'training'
             job.save(update_fields=['status', 'updated_at'])

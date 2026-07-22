@@ -292,7 +292,8 @@ def weight_mirror_urls(model_name: str):
 
 
 def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -> str:
-    """本地有则直接返回；否则多镜像并行竞速下载。"""
+    """本地有则直接返回；否则多镜像并行竞速下载，并向 log_fn 汇报进度（不刷每个镜像 URL）。"""
+    import time
     import requests
 
     dest_dir = dest_dir or models_dir()
@@ -300,7 +301,7 @@ def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -
     dest_path = Path(dest_dir) / f'{stem}.pt'
     if dest_path.exists() and dest_path.stat().st_size > 1_000_000:
         if log_fn:
-            log_fn(f'本地已有权重，跳过下载：{dest_path}')
+            log_fn(f'本地已有权重，跳过下载：{dest_path.name}')
         return str(dest_path)
 
     os.makedirs(dest_dir, exist_ok=True)
@@ -308,38 +309,76 @@ def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -
     stop_event = threading.Event()
     errors = []
     min_bytes = 1_000_000
+    progress_lock = threading.Lock()
+    # best_downloaded, last_log_ts, last_logged_mb
+    progress_state = {'bytes': 0, 'total': 0, 'last_ts': 0.0, 'last_mb': -1.0}
+
+    def _emit_progress(downloaded: int, total: int = 0):
+        if not log_fn:
+            return
+        now = time.time()
+        mb = downloaded / (1024 * 1024)
+        with progress_lock:
+            # 只跟踪当前领先的那一路，避免多镜像互相刷屏
+            if downloaded < progress_state['bytes'] and not stop_event.is_set():
+                return
+            progress_state['bytes'] = max(progress_state['bytes'], downloaded)
+            if total > 0:
+                progress_state['total'] = total
+            total = progress_state['total']
+            # 至少间隔 1.5s，或每增加约 5MB 打一条
+            if (
+                mb - progress_state['last_mb'] < 5
+                and now - progress_state['last_ts'] < 1.5
+                and not (total > 0 and downloaded >= total)
+            ):
+                return
+            progress_state['last_ts'] = now
+            progress_state['last_mb'] = mb
+            if total > 0:
+                pct = min(99, int(downloaded * 100 / total))
+                total_mb = total / (1024 * 1024)
+                msg = f'下载进度：{pct}%（{mb:.1f}/{total_mb:.1f} MB）'
+            else:
+                msg = f'下载进度：已下载 {mb:.1f} MB'
+        log_fn(msg)
 
     def _one(url):
         if stop_event.is_set():
             return None
         tmp = None
         try:
-            if log_fn:
-                log_fn(f'尝试下载：{url[:120]}...')
-            with requests.get(url, timeout=(6, 180), stream=True, allow_redirects=True) as resp:
+            logger.debug('weight mirror try: %s', url)
+            with requests.get(url, timeout=(8, 180), stream=True, allow_redirects=True) as resp:
                 if resp.status_code != 200:
                     raise RuntimeError(f'HTTP {resp.status_code}')
+                total = int(resp.headers.get('Content-Length') or 0)
                 fd, tmp = tempfile.mkstemp(suffix='.pt', dir=dest_dir)
                 os.close(fd)
                 size = 0
                 with open(tmp, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=1024 * 512):
+                    for chunk in resp.iter_content(chunk_size=1024 * 256):
                         if stop_event.is_set():
                             raise RuntimeError('cancelled')
                         if chunk:
                             f.write(chunk)
                             size += len(chunk)
+                            _emit_progress(size, total)
                 if size < min_bytes:
                     raise RuntimeError(f'file too small ({size} bytes)')
                 return tmp, url, size
         except Exception as e:
             errors.append(f'{url}: {e}')
+            logger.debug('weight mirror fail %s: %s', url, e)
             if tmp and os.path.exists(tmp):
                 try:
                     os.remove(tmp)
                 except OSError:
                     pass
             return None
+
+    if log_fn:
+        log_fn(f'开始下载 {stem}.pt（多镜像竞速）…')
 
     winners = []
     with ThreadPoolExecutor(max_workers=min(5, len(mirrors))) as pool:
@@ -352,7 +391,6 @@ def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -
                 break
 
     if not winners:
-        gh = weight_mirror_urls(stem)
         raise RuntimeError(
             f'无法下载 {stem}.pt，已尝试 {len(mirrors)} 个源。\n'
             f'可设置 YOLO_WEIGHTS_MIRRORS，或手动放到 {dest_dir}\n'
@@ -364,7 +402,10 @@ def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -
     if dest_path.exists():
         dest_path.unlink(missing_ok=True)
     os.replace(tmp, dest_path)
+    mb = round(size / 1024 / 1024, 1)
     if log_fn:
-        log_fn(f'下载成功（{round(size / 1024 / 1024, 1)} MB）：{url}')
+        # 完成时给 100%，只保留主机名，不刷完整镜像链
+        host = url.split('/')[2] if '://' in url else url[:40]
+        log_fn(f'下载完成：100%（{mb} MB）← {host}')
     logger.info('downloaded %s from %s (%s bytes)', dest_path, url, size)
     return str(dest_path)
