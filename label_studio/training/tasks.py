@@ -91,7 +91,7 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
 
     yaml_stem = f'job_{job_id}' if job_id is not None else dataset_name
     dst = os.path.join(_CV_ULTRA, 'datasets', yaml_stem, task_type)
-    train_ratio, valid_ratio, test_ratio = 0.85, 0.15, 0.0
+    train_ratio, valid_ratio, test_ratio = 0.8, 0.15, 0.05
 
     if os.path.isdir(dst):
         shutil.rmtree(dst, ignore_errors=True)
@@ -100,7 +100,7 @@ def build_dataset(export_dir: str, dataset_name: str, task_type: str, classes: l
     _l(f'开始构建数据集：任务={task_type}，类别数={len(classes)}，类别={classes}')
     _l(
         f'划分比例：训练集 {train_ratio:.0%} / 验证集 {valid_ratio:.0%} / 测试集 {test_ratio:.0%}'
-        f'（测试集为 0 表示不预留，样本全部分到 train+val）'
+        f'（与 cv-ultralytics 原仓库一致）'
     )
 
     if task_type == 'cls':

@@ -69,8 +69,9 @@ def split_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.8, valid_ra
         valid_size = total_data - train_size
         test_size = 0
     else:
+        # 与 cv-ultralytics 原仓库一致：train/valid 按比例取整，剩余全部进 test
         train_size = int(total_data * train_ratio)
-        valid_size = max(1, int(total_data * valid_ratio))
+        valid_size = int(total_data * valid_ratio)
         test_size = total_data - train_size - valid_size
         if test_size < 0:
             train_size += test_size
@@ -159,8 +160,9 @@ def split_cls_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.85, val
         valid_size = total - train_size
         test_size = 0
     else:
+        # 与 detect 划分一致：剩余进 test
         train_size = int(total * train_ratio)
-        valid_size = max(1, int(total * valid_ratio))
+        valid_size = int(total * valid_ratio)
         test_size = total - train_size - valid_size
         if test_size < 0:
             train_size += test_size
