@@ -271,14 +271,17 @@ const StartTrain = () => {
       params: { task_type: taskType, version: yoloVersion },
     }).then((data) => {
       setWeightInfo(data);
-      const opt = (data?.options || []).find((o) => o.scale === yoloScale);
-      if (!opt && data?.options?.length) {
-        // keep scale if valid; else default x
-        const has = data.options.some((o) => o.scale === yoloScale);
-        if (!has) setYoloScale("x");
+      // 任务不支持当前版本时，API 会回退到可用版本
+      if (data?.version && String(data.version) !== String(yoloVersion)) {
+        setYoloVersion(String(data.version));
+      }
+      const scales = data?.scales || data?.options || [];
+      const scaleValues = scales.map((s) => s.value || s.scale);
+      if (scaleValues.length && !scaleValues.includes(yoloScale)) {
+        setYoloScale(data.default_scale || scaleValues[0] || "x");
       }
     }).catch(() => setWeightInfo(null));
-  }, [api, taskType, yoloVersion, yoloScale]);
+  }, [api, taskType, yoloVersion]);
 
   const selectedWeight = useMemo(() => {
     return (weightInfo?.options || []).find((o) => o.scale === yoloScale) || null;
@@ -331,8 +334,8 @@ const StartTrain = () => {
         <Elem name="panel-title">启动训练</Elem>
         <Elem name="hint">
           选择配置与一个/多个项目合并训练。项目标签类别必须与配置 classes 完全一致，否则会报错。
-          任务类型（detect/obb/seg/cls）随配置自动确定；下方选择 YOLO 版本与尺寸档位。
-          本地有预训练权重则直接使用，没有则走国内镜像竞速下载。
+          任务类型（detect/obb/seg/cls）随配置自动确定；下方选择 YOLO 版本（v5/v8/v9/v10）与尺寸档位。
+          不支持当前任务的版本会自动隐藏（如 obb 仅 YOLOv8）。本地有权重则直接用，没有则国内镜像竞速下载。
         </Elem>
 
         <Elem name="section">
@@ -365,9 +368,16 @@ const StartTrain = () => {
             <Elem name="form-item">
               <Elem name="param-label">YOLO 版本</Elem>
               <select value={yoloVersion} onChange={(e) => setYoloVersion(e.target.value)}>
-                {(weightInfo?.versions || ["8"]).map((v) => (
-                  <option key={v} value={v}>YOLOv{v}</option>
-                ))}
+                {(weightInfo?.versions || [
+                  { value: "5", label: "YOLOv5" },
+                  { value: "8", label: "YOLOv8" },
+                  { value: "9", label: "YOLOv9" },
+                  { value: "10", label: "YOLOv10" },
+                ]).map((v) => {
+                  const val = typeof v === "object" ? v.value : v;
+                  const label = typeof v === "object" ? (v.label || `YOLOv${v.value}`) : `YOLOv${v}`;
+                  return <option key={val} value={val}>{label}</option>;
+                })}
               </select>
             </Elem>
             <Elem name="form-item">

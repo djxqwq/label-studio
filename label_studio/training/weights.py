@@ -1,4 +1,4 @@
-"""YOLO 预训练权重：本地扫描、命名规则、国内镜像下载"""
+"""YOLO 预训练权重：多版本目录、本地扫描、国内镜像下载"""
 import logging
 import os
 import tempfile
@@ -12,19 +12,87 @@ _BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _CV_ULTRA = os.environ.get('CV_ULTRA_PATH', os.path.join(_BASE, 'cv-ultralytics'))
 _MODELS_DIR = os.path.join(_CV_ULTRA, 'ultralytics', 'ultralytics', 'models')
 
-# 官方 release tag（权重文件名稳定）
-GITHUB_RELEASE = os.environ.get('YOLO_WEIGHTS_RELEASE', 'v8.2.0')
+# 官方 release：latest/download 可拿到各版本权重；也可用 YOLO_WEIGHTS_RELEASE=v8.3.0 固定
+GITHUB_RELEASE = os.environ.get('YOLO_WEIGHTS_RELEASE', 'latest')
 
-YOLO_VERSIONS = ['8']
-YOLO_SCALES = [
-    {'value': 'n', 'label': 'n (nano，最快最小)'},
-    {'value': 's', 'label': 's (small)'},
-    {'value': 'm', 'label': 'm (medium)'},
-    {'value': 'l', 'label': 'l (large)'},
-    {'value': 'x', 'label': 'x (xlarge，精度优先)'},
-]
+# 与当前 vendored Ultralytics（约 8.x）对齐的可用家族：
+# - v5：detect（权重名 yolov5{n}u.pt）
+# - v8：detect/obb/seg/cls（yolov8{n}[-obb|-seg|-cls].pt）
+# - v9：detect(t/s/m/c/e)；seg 仅 c/e；无 obb/cls
+# - v10：detect(n/s/m/b/l/x)；无 obb/seg/cls
+YOLO_FAMILIES = {
+    '5': {
+        'value': '5',
+        'label': 'YOLOv5',
+        'default_scale': 'x',
+        'scales': [
+            {'value': 'n', 'label': 'n (nano)'},
+            {'value': 's', 'label': 's (small)'},
+            {'value': 'm', 'label': 'm (medium)'},
+            {'value': 'l', 'label': 'l (large)'},
+            {'value': 'x', 'label': 'x (xlarge)'},
+        ],
+        'tasks': {
+            'detect': ['n', 's', 'm', 'l', 'x'],
+        },
+        # Ultralytics 重写版权重带 u 后缀
+        'stem': lambda scale, suffix: f'yolov5{scale}u',
+    },
+    '8': {
+        'value': '8',
+        'label': 'YOLOv8',
+        'default_scale': 'x',
+        'scales': [
+            {'value': 'n', 'label': 'n (nano，最快最小)'},
+            {'value': 's', 'label': 's (small)'},
+            {'value': 'm', 'label': 'm (medium)'},
+            {'value': 'l', 'label': 'l (large)'},
+            {'value': 'x', 'label': 'x (xlarge，精度优先)'},
+        ],
+        'tasks': {
+            'detect': ['n', 's', 'm', 'l', 'x'],
+            'obb': ['n', 's', 'm', 'l', 'x'],
+            'seg': ['n', 's', 'm', 'l', 'x'],
+            'cls': ['n', 's', 'm', 'l', 'x'],
+        },
+        'stem': lambda scale, suffix: f'yolov8{scale}{suffix}',
+    },
+    '9': {
+        'value': '9',
+        'label': 'YOLOv9',
+        'default_scale': 'c',
+        'scales': [
+            {'value': 't', 'label': 't (tiny)'},
+            {'value': 's', 'label': 's (small)'},
+            {'value': 'm', 'label': 'm (medium)'},
+            {'value': 'c', 'label': 'c (compact，常用)'},
+            {'value': 'e', 'label': 'e (extended，更大)'},
+        ],
+        'tasks': {
+            'detect': ['t', 's', 'm', 'c', 'e'],
+            'seg': ['c', 'e'],
+        },
+        'stem': lambda scale, suffix: f'yolov9{scale}{suffix}',
+    },
+    '10': {
+        'value': '10',
+        'label': 'YOLOv10',
+        'default_scale': 'x',
+        'scales': [
+            {'value': 'n', 'label': 'n (nano)'},
+            {'value': 's', 'label': 's (small)'},
+            {'value': 'm', 'label': 'm (medium)'},
+            {'value': 'b', 'label': 'b (balanced)'},
+            {'value': 'l', 'label': 'l (large)'},
+            {'value': 'x', 'label': 'x (xlarge)'},
+        ],
+        'tasks': {
+            'detect': ['n', 's', 'm', 'b', 'l', 'x'],
+        },
+        'stem': lambda scale, suffix: f'yolov10{scale}',
+    },
+}
 
-# task_type → 权重名后缀（detect 无后缀）
 TASK_SUFFIX = {
     'detect': '',
     'obb': '-obb',
@@ -32,29 +100,66 @@ TASK_SUFFIX = {
     'cls': '-cls',
 }
 
+# 兼容旧常量
+YOLO_VERSIONS = list(YOLO_FAMILIES.keys())
+YOLO_SCALES = YOLO_FAMILIES['8']['scales']
+
 
 def models_dir() -> str:
     return os.environ.get('YOLO_MODELS_DIR', _MODELS_DIR)
 
 
-def build_weight_stem(version: str, scale: str, task_type: str) -> str:
-    """yolov8x-obb / yolov8n / yolov8s-seg ..."""
+def get_family(version: str) -> dict:
     ver = str(version or '8').lstrip('vV')
-    sc = (scale or 'x').lower()
-    if sc not in {s['value'] for s in YOLO_SCALES}:
-        sc = 'x'
-    suffix = TASK_SUFFIX.get(task_type or 'detect', '')
-    return f'yolov{ver}{sc}{suffix}'
+    return YOLO_FAMILIES.get(ver) or YOLO_FAMILIES['8']
+
+
+def versions_for_task(task_type: str):
+    """某任务类型下可选的 YOLO 版本（过滤不支持的家族）。"""
+    task = (task_type or 'detect').lower()
+    out = []
+    for fam in YOLO_FAMILIES.values():
+        if task in fam['tasks']:
+            out.append({
+                'value': fam['value'],
+                'label': fam['label'],
+                'default_scale': fam['default_scale'],
+            })
+    return out or [{'value': '8', 'label': 'YOLOv8', 'default_scale': 'x'}]
+
+
+def scales_for(version: str, task_type: str):
+    fam = get_family(version)
+    task = (task_type or 'detect').lower()
+    allowed = fam['tasks'].get(task) or fam['tasks'].get('detect') or []
+    return [s for s in fam['scales'] if s['value'] in allowed]
+
+
+def build_weight_stem(version: str, scale: str, task_type: str) -> str:
+    """yolov8x-obb / yolov5xu / yolov9c-seg / yolov10x ..."""
+    fam = get_family(version)
+    task = (task_type or 'detect').lower()
+    allowed = set(fam['tasks'].get(task) or [])
+    sc = (scale or fam['default_scale']).lower()
+    if sc not in allowed:
+        sc = fam['default_scale'] if fam['default_scale'] in allowed else (next(iter(allowed), 'n'))
+    # v10 无任务后缀；v5 的 stem 函数忽略 suffix；其余按 task 加后缀
+    suffix = '' if fam['value'] in ('5', '10') else TASK_SUFFIX.get(task, '')
+    if fam['value'] == '9' and task == 'detect':
+        suffix = ''
+    return fam['stem'](sc, suffix)
 
 
 def build_model_names(version: str, scale: str, task_type: str) -> dict:
     stem = build_weight_stem(version, scale, task_type)
-    # yaml：Ultralytics 接受 yolov8x-obb.yaml 这种带尺度名；基座文件为 yolov8-obb.yaml
     return {
         'stem': stem,
         'model_pt': stem,
         'model_yaml': stem,
         'filename': f'{stem}.pt',
+        'version': get_family(version)['value'],
+        'scale': scale,
+        'task_type': task_type,
     }
 
 
@@ -83,18 +188,26 @@ def list_local_weights():
 
 
 def weight_catalog(task_type: str = 'obb', version: str = '8'):
-    """某任务下可选的全部尺度（含是否本地存在）"""
+    """某任务 + 版本下可选的全部尺度（含是否本地存在）"""
     local = {w['name']: w for w in list_local_weights()}
+    fam = get_family(version)
+    task = (task_type or 'detect').lower()
+    # 该版本不支持此任务时回退到 v8（若 v8 支持）或第一个可用版本
+    if task not in fam['tasks']:
+        for fallback in versions_for_task(task):
+            fam = get_family(fallback['value'])
+            version = fam['value']
+            break
     options = []
-    for s in YOLO_SCALES:
-        names = build_model_names(version, s['value'], task_type)
+    for s in scales_for(version, task):
+        names = build_model_names(version, s['value'], task)
         stem = names['stem']
         loc = local.get(stem)
         options.append({
-            'version': version,
+            'version': fam['value'],
             'scale': s['value'],
             'scale_label': s['label'],
-            'task_type': task_type,
+            'task_type': task,
             'stem': stem,
             'model_pt': names['model_pt'],
             'model_yaml': names['model_yaml'],
@@ -107,33 +220,47 @@ def weight_catalog(task_type: str = 'obb', version: str = '8'):
 
 
 def weights_api_payload(task_type: str = 'obb', version: str = '8'):
+    task = (task_type or 'obb').lower()
+    versions = versions_for_task(task)
+    ver_values = {v['value'] for v in versions}
+    ver = str(version or '8').lstrip('vV')
+    if ver not in ver_values:
+        ver = versions[0]['value'] if versions else '8'
+    fam = get_family(ver)
     return {
-        'versions': YOLO_VERSIONS,
-        'scales': YOLO_SCALES,
+        'versions': versions,
+        'version': ver,
+        'scales': scales_for(ver, task),
+        'default_scale': fam['default_scale'],
         'task_types': list(TASK_SUFFIX.keys()),
+        'task_type': task,
         'models_dir': models_dir(),
         'local': list_local_weights(),
-        'options': weight_catalog(task_type=task_type, version=version),
+        'options': weight_catalog(task_type=task, version=ver),
         'mirrors_hint': [
-            'https://ghfast.top/…（GitHub 加速，实测可用）',
-            'https://hf-mirror.com/Ultralytics/YOLOv8/…（HF 国内镜像，实测可用）',
+            'https://ghfast.top/…（GitHub 加速）',
+            'https://hf-mirror.com/Ultralytics/YOLOv8/…（仅部分 v8 权重）',
         ],
+        'notes': {
+            '5': 'YOLOv5 仅 detect；权重名为 yolov5nu.pt 等形式',
+            '8': 'YOLOv8 支持 detect / obb / seg / cls',
+            '9': 'YOLOv9 支持 detect；seg 仅 c/e；无 obb/cls',
+            '10': 'YOLOv10 仅 detect',
+        },
     }
 
 
 def weight_mirror_urls(model_name: str):
-    """国内可直连优先的镜像列表（可用 YOLO_WEIGHTS_MIRRORS 覆盖）。
-
-    实测（无需 VPN）：
-    - ghfast.top 代理 GitHub releases
-    - hf-mirror.com 的 Ultralytics/YOLOv8
-    """
+    """国内可直连优先的镜像列表（可用 YOLO_WEIGHTS_MIRRORS 覆盖）。"""
     filename = f'{model_name}.pt' if not str(model_name).endswith('.pt') else model_name
     stem = filename[:-3] if filename.endswith('.pt') else model_name
-    github = (
-        f'https://github.com/ultralytics/assets/releases/download/'
-        f'{GITHUB_RELEASE}/{filename}'
-    )
+    if GITHUB_RELEASE == 'latest':
+        github = f'https://github.com/ultralytics/assets/releases/latest/download/{filename}'
+    else:
+        github = (
+            f'https://github.com/ultralytics/assets/releases/download/'
+            f'{GITHUB_RELEASE}/{filename}'
+        )
     custom = os.environ.get('YOLO_WEIGHTS_MIRRORS', '').strip()
     if custom:
         urls = []
@@ -148,19 +275,20 @@ def weight_mirror_urls(model_name: str):
             )
         return urls
 
-    return [
-        # 实测可用、国内无需 VPN（按响应速度大致排序）
+    urls = [
         f'https://gh-proxy.com/{github}',
         f'https://ghfast.top/{github}',
         f'https://ghproxy.net/{github}',
-        f'https://hf-mirror.com/Ultralytics/YOLOv8/resolve/main/{filename}',
         f'https://edgeone.gh-proxy.com/{github}',
-        f'https://mirror.ghproxy.com/{github}',
-        # 官方兜底
+    ]
+    # HF 镜像主要托管 YOLOv8 系列；其它版本仍放上作为附加尝试
+    urls.append(f'https://hf-mirror.com/Ultralytics/YOLOv8/resolve/main/{filename}')
+    urls.extend([
         f'https://ultralytics.com/assets/{filename}',
         f'https://huggingface.co/Ultralytics/YOLOv8/resolve/main/{filename}',
         github,
-    ]
+    ])
+    return urls
 
 
 def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -> str:
@@ -187,7 +315,7 @@ def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -
         tmp = None
         try:
             if log_fn:
-                log_fn(f'尝试下载：{url[:100]}...')
+                log_fn(f'尝试下载：{url[:120]}...')
             with requests.get(url, timeout=(6, 180), stream=True, allow_redirects=True) as resp:
                 if resp.status_code != 200:
                     raise RuntimeError(f'HTTP {resp.status_code}')
@@ -224,11 +352,11 @@ def download_model_weights(model_name: str, dest_dir: str = None, log_fn=None) -
                 break
 
     if not winners:
+        gh = weight_mirror_urls(stem)
         raise RuntimeError(
             f'无法下载 {stem}.pt，已尝试 {len(mirrors)} 个源。\n'
             f'可设置 YOLO_WEIGHTS_MIRRORS，或手动放到 {dest_dir}\n'
-            f'推荐手动：https://ghfast.top/{weight_mirror_urls(stem)[-1] if False else "https://github.com/ultralytics/assets/releases/download/" + GITHUB_RELEASE + "/" + stem + ".pt"}\n'
-            f'或：https://hf-mirror.com/Ultralytics/YOLOv8/resolve/main/{stem}.pt\n'
+            f'推荐：https://ghfast.top/https://github.com/ultralytics/assets/releases/latest/download/{stem}.pt\n'
             f'错误摘要：{errors[:4]}'
         )
 

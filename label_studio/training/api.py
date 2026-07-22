@@ -621,13 +621,18 @@ def _start_train_thread(job, config, params, export_dir, cleanup_dir):
             job.status = 'training'
             job.save(update_fields=['status', 'updated_at'])
 
+            # params 里可能含 model_pt/model_yaml/task_type，避免与显式参数冲突
+            train_kwargs = {
+                k: v for k, v in (params or {}).items()
+                if k not in ('model_pt', 'model_yaml', 'task_type', 'data_yaml', 'job')
+            }
             run_training(
                 job=job,
                 model_yaml=config.model_yaml,
                 model_pt=config.model_pt,
                 data_yaml=data_ref,
                 task_type=config.task_type,
-                **params,
+                **train_kwargs,
             )
 
             job.refresh_from_db()
@@ -788,11 +793,30 @@ class TrainStartAPI(APIView):
         )
         params['project_ids'] = project_ids
 
+        from .weights import build_model_names, get_family, versions_for_task
+
+        ver = serializer.validated_data.get('yolo_version') or '8'
+        sc = serializer.validated_data.get('yolo_scale') or 'x'
+        fam = get_family(ver)
+        if config.task_type not in fam['tasks']:
+            supported = [v['label'] for v in versions_for_task(config.task_type)]
+            return Response(
+                {
+                    'error': (
+                        f'{fam["label"]} 不支持任务类型 {config.task_type}；'
+                        f'可选版本：{", ".join(supported)}'
+                    ),
+                },
+                status=400,
+            )
+        # 显式 model_pt 优先，否则按版本/尺寸生成
         model_names = serializer.resolved_model_names(config.task_type)
+        if not serializer.validated_data.get('model_pt'):
+            model_names = build_model_names(ver, sc, config.task_type)
         params['model_pt'] = model_names['model_pt']
         params['model_yaml'] = model_names['model_yaml']
-        params['yolo_version'] = data.get('yolo_version') or '8'
-        params['yolo_scale'] = data.get('yolo_scale') or 'x'
+        params['yolo_version'] = ver
+        params['yolo_scale'] = sc
 
         runtime_config = SimpleNamespace(
             name=config.name,

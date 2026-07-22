@@ -134,12 +134,17 @@ def _download_model_weights(model_name: str, dest_dir: str) -> str:
 
 
 def _extract_model_scale(model_yaml: str, model_pt: str) -> str:
-    """从 yaml/pt 名解析尺度字母 n/s/m/l/x，默认 x（与业务常用 yolov8x-* 一致）。"""
+    """从 yaml/pt 名解析尺度字母（含 v9 的 t/c/e、v10 的 b、v5 的 *u）。"""
     import re
     for name in (model_yaml or '', model_pt or ''):
-        m = re.search(r'yolov\d+([nsmlx])(?:-|$)|yolo\d+([nsmlx])(?:-|$)', name, re.I)
+        # yolov8x-obb / yolov5xu / yolov9c-seg / yolov10b / yolo11n
+        m = re.search(
+            r'yolo(?:v)?\d+([ntsmlxceb])(?:u)?(?:-|$|\.|$)',
+            name,
+            re.I,
+        )
         if m:
-            return (m.group(1) or m.group(2)).lower()
+            return m.group(1).lower()
     return 'x'
 
 

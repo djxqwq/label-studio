@@ -18,12 +18,26 @@ class TrainRequestSerializer(serializers.Serializer):
     imgsz = serializers.IntegerField(required=False, min_value=32)
     device = serializers.CharField(required=False, allow_blank=True)
     # 启动页选择 YOLO 版本/尺寸（覆盖配置里的 model_pt/yaml）
-    yolo_version = serializers.ChoiceField(choices=['8'], required=False, default='8')
-    yolo_scale = serializers.ChoiceField(
-        choices=['n', 's', 'm', 'l', 'x'], required=False, default='x',
-    )
+    # 版本：5/8/9/10；尺寸随版本变化（v9 为 t/s/m/c/e，v10 含 b）
+    yolo_version = serializers.CharField(required=False, default='8')
+    yolo_scale = serializers.CharField(required=False, default='x')
     model_pt = serializers.CharField(required=False, allow_blank=True)
     model_yaml = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_yolo_version(self, value):
+        from .weights import YOLO_FAMILIES
+        ver = str(value or '8').lstrip('vV')
+        if ver not in YOLO_FAMILIES:
+            raise serializers.ValidationError(
+                f'不支持的 YOLO 版本: {value}，可选: {", ".join(YOLO_FAMILIES)}'
+            )
+        return ver
+
+    def validate_yolo_scale(self, value):
+        sc = str(value or 'x').lower().strip()
+        if not sc or len(sc) > 2:
+            raise serializers.ValidationError(f'无效尺寸档位: {value}')
+        return sc
 
     def validated_train_params(self):
         data = self.validated_data
