@@ -3,15 +3,14 @@ import logging
 import os
 import shutil
 
-logger = logging.getLogger(__name__)
+from .paths import job_runs_root as _job_runs_root
 
-_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_CV_ULTRA = os.environ.get('CV_ULTRA_PATH', os.path.join(_BASE, 'cv-ultralytics'))
+logger = logging.getLogger(__name__)
 
 
 def job_runs_root(job_id) -> str:
     """每个任务独立的 Ultralytics runs 根目录"""
-    return os.path.join(_CV_ULTRA, 'runs', f'job_{job_id}')
+    return _job_runs_root(job_id)
 
 
 def cleanup_job_files(job) -> int:

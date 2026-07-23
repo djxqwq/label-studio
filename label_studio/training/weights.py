@@ -6,11 +6,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from .paths import models_weights_dir
+
 logger = logging.getLogger(__name__)
 
-_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_CV_ULTRA = os.environ.get('CV_ULTRA_PATH', os.path.join(_BASE, 'cv-ultralytics'))
-_MODELS_DIR = os.path.join(_CV_ULTRA, 'ultralytics', 'ultralytics', 'models')
+_MODELS_DIR = models_weights_dir()
 
 # 官方 release：latest/download 可拿到各版本权重；也可用 YOLO_WEIGHTS_RELEASE=v8.3.0 固定
 GITHUB_RELEASE = os.environ.get('YOLO_WEIGHTS_RELEASE', 'latest')

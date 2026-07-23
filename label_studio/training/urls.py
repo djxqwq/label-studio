@@ -24,6 +24,11 @@ urlpatterns = [
             api.TrainJobModelsAPI.as_view(), name='train-job-models'),
     re_path(r'^api/train/jobs/(?P<job_id>\d+)/artifacts/(?P<key>[\w-]+)/?$',
             api.TrainJobArtifactAPI.as_view(), name='train-job-artifact'),
+    # 训练服内网拉包 / 回传产物（X-Training-Token，无用户会话）
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/package/?$',
+            api.TrainJobPackageAPI.as_view(), name='train-job-package'),
+    re_path(r'^api/train/jobs/(?P<job_id>\d+)/receive-artifacts/?$',
+            api.TrainJobReceiveArtifactsAPI.as_view(), name='train-job-receive-artifacts'),
     # 模型下载（删除请走删除整个任务）
     re_path(r'^api/train/models/(?P<mid>\d+)/download/?$',
             api.TrainModelDownloadAPI.as_view(), name='train-model-download'),

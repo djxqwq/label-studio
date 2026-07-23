@@ -30,6 +30,7 @@ deploy/redis-data/
 deploy/dockerfiles/postgres-data
 deploy/dockerfiles/mysql-data
 postgres-data
+redis-data
 mysql-data
 
 label_studio/core/media
@@ -91,3 +92,6 @@ web/libs/editor/public/files/*.mp*
 # 本地启动脚本（不上传）
 start-frontend.bat
 start-backend.bat
+# SSH keys for training-worker (do not commit)
+ssh/
+

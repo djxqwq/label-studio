@@ -3,8 +3,9 @@ import os
 import sys
 import shutil
 
-_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_CV_ULTRA = os.environ.get('CV_ULTRA_PATH', os.path.join(_BASE, 'cv-ultralytics'))
+from .paths import cv_ultra_root
+
+_CV_ULTRA = cv_ultra_root()
 _ULTRA_SRC = os.path.join(_CV_ULTRA, 'ultralytics')
 if _ULTRA_SRC not in sys.path:
     sys.path.insert(0, _ULTRA_SRC)

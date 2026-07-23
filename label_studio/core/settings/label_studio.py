@@ -28,7 +28,48 @@ SESSION_COOKIE_SECURE = get_bool_env('SESSION_COOKIE_SECURE', False)
 
 SESSION_ENGINE = 'django.contrib.sessions.backends.signed_cookies'
 
-RQ_QUEUES = {}
+# Redis / RQ — opensource 默认连本地 Redis；无 Redis 时训练可回退本机线程
+REDIS_HOST = get_env('REDIS_HOST', 'localhost')
+REDIS_PORT = int(get_env('REDIS_PORT', 6379))
+REDIS_DB = int(get_env('REDIS_DB', 0))
+_REDIS_PASSWORD = get_env('REDIS_PASSWORD', None)
+
+_rq_base = {
+    'HOST': REDIS_HOST,
+    'PORT': REDIS_PORT,
+    'DB': REDIS_DB,
+    'DEFAULT_TIMEOUT': int(get_env('RQ_DEFAULT_TIMEOUT', 180)),
+}
+if _REDIS_PASSWORD:
+    _rq_base['PASSWORD'] = _REDIS_PASSWORD
+
+TRAINING_QUEUE = get_env('TRAINING_QUEUE', 'training')
+TRAINING_JOB_TIMEOUT = int(get_env('TRAINING_JOB_TIMEOUT', 48 * 3600))  # 48h
+# rq：入队由 GPU 机 rqworker 消费；local：本机 threading（无 Redis/调试）
+TRAINING_EXECUTOR = get_env('TRAINING_EXECUTOR', 'rq')
+# shared：两边挂同一盘；ssh：训练服 scp 拉包/回传（双机无共享盘推荐）；http：备选
+TRAINING_DATA_MODE = get_env('TRAINING_DATA_MODE', 'shared')
+TRAINING_WORKER_TOKEN = get_env('TRAINING_WORKER_TOKEN', '')
+TRAINING_ANNOTATION_URL = get_env('TRAINING_ANNOTATION_URL', '')
+TRAINING_SSH_HOST = get_env('TRAINING_SSH_HOST', '')
+TRAINING_SSH_USER = get_env('TRAINING_SSH_USER', 'root')
+TRAINING_SSH_PORT = get_env('TRAINING_SSH_PORT', '22')
+TRAINING_SSH_KEY = get_env('TRAINING_SSH_KEY', '')
+# 标注服宿主机 mydata 绝对路径，如 /opt/label-studio/mydata
+TRAINING_SSH_REMOTE_DATA = get_env('TRAINING_SSH_REMOTE_DATA', '')
+# 标注服容器内数据根，写入 DB 供下载 API 使用
+TRAINING_ANNOTATION_DATA_DIR = get_env('TRAINING_ANNOTATION_DATA_DIR', '/label-studio/data')
+
+RQ_QUEUES = {
+    'critical': dict(_rq_base),
+    'high': dict(_rq_base),
+    'default': dict(_rq_base),
+    'low': dict(_rq_base),
+    TRAINING_QUEUE: {
+        **_rq_base,
+        'DEFAULT_TIMEOUT': TRAINING_JOB_TIMEOUT,
+    },
+}
 
 SENTRY_DSN = get_env('SENTRY_DSN', 'https://68b045ab408a4d32a910d339be8591a4@o227124.ingest.sentry.io/5820521')
 SENTRY_ENVIRONMENT = get_env('SENTRY_ENVIRONMENT', 'opensource')

@@ -9,7 +9,6 @@ import threading
 import zipfile
 
 from django.conf import settings as django_settings
-from django.db import close_old_connections
 from django.http import FileResponse
 from rest_framework import status
 from rest_framework.response import Response
@@ -23,11 +22,31 @@ from projects.models import Project
 from tasks.models import Task
 
 from .models import ModelConfig, TrainingJob, TrainedModel
+from .rq_jobs import execute_training_job
 from .serializers import TrainRequestSerializer, ModelConfigSerializer
-from .tasks import TrainingStopped, build_dataset, run_training
 
 logger = logging.getLogger(__name__)
-_BASE = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+
+
+def _training_executor():
+    """rq（默认）| local（本机线程，无 Redis/Worker 时调试用）"""
+    return (getattr(django_settings, 'TRAINING_EXECUTOR', None) or os.environ.get('TRAINING_EXECUTOR') or 'rq').lower()
+
+
+def _training_queue_name():
+    return getattr(django_settings, 'TRAINING_QUEUE', None) or os.environ.get('TRAINING_QUEUE') or 'training'
+
+
+def _config_to_dict(config):
+    return {
+        'name': getattr(config, 'name', None),
+        'task_type': getattr(config, 'task_type', None),
+        'classes': list(getattr(config, 'classes', None) or []),
+        'data_yaml': getattr(config, 'data_yaml', None),
+        'model_yaml': getattr(config, 'model_yaml', None),
+        'model_pt': getattr(config, 'model_pt', None),
+        'epochs': getattr(config, 'epochs', None),
+    }
 
 
 # ==================== 模型配置 CRUD ====================
@@ -524,8 +543,9 @@ def _merge_export_dirs(source_roots, merge_dir, task_type='detect'):
 
 
 def _do_multi_project_export(request, projects, config):
-    tmp_root = os.path.join(django_settings.BASE_DATA_DIR, 'tmp')
-    os.makedirs(tmp_root, exist_ok=True)
+    from .paths import training_export_tmp_root
+
+    tmp_root = training_export_tmp_root()
     work_dir = tempfile.mkdtemp(dir=tmp_root, prefix='ls_train_multi_')
     source_roots = []
     per_project = []
@@ -562,111 +582,78 @@ def _do_multi_project_export(request, projects, config):
         raise
 
 
-def _start_train_thread(job, config, params, export_dir, cleanup_dir):
+def _start_train_local_thread(job, config_dict, params, export_dir, cleanup_dir):
+    """无 Redis / 显式 TRAINING_EXECUTOR=local 时的本机线程回退。"""
     def _train():
-        close_old_connections()
-        # 按 job.id 隔离，避免同配置并发训练互相覆盖数据集 / data.yaml
-        dataset_root = os.path.join(_BASE, 'cv-ultralytics', 'datasets', f'job_{job.id}')
-        dataset_dir = os.path.join(dataset_root, config.task_type)
-        data_yaml_path = os.path.join(
-            _BASE, 'cv-ultralytics', 'ultralytics', 'ultralytics',
-            'cfg', 'datasets', f'job_{job.id}.yaml',
-        )
-        try:
-            job.refresh_from_db()
-            if job.stop_requested:
-                job.status = 'stopped'
-                job.save(update_fields=['status', 'updated_at'])
-                return
-
-            data_name = config.data_yaml or config.name
-            # 训练日志：任务概览 + 各项目导出数量 + 划分详情
-            from .tasks import _log as train_log
-            project_ids = (params or {}).get('project_ids') or []
-            train_log(job, '======== 训练任务开始 ========')
-            train_log(
-                job,
-                f'任务 #{job.id} | 配置={config.name} | 类型={config.task_type} | '
-                f'类别={list(config.classes or [])}',
-            )
-            train_log(
-                job,
-                f'预训练：{config.model_pt}.pt | 项目数={len(project_ids)} | '
-                f'epochs={params.get("epochs")} batch={params.get("batch")} imgsz={params.get("imgsz")}',
-            )
-            stats_path = os.path.join(os.path.dirname(export_dir.rstrip('/\\')), 'export_stats.json')
-            if os.path.isfile(stats_path):
-                try:
-                    with open(stats_path, encoding='utf-8') as f:
-                        stats = json.load(f)
-                    train_log(job, '-------- 导出统计 --------')
-                    train_log(
-                        job,
-                        f'共 {stats.get("project_count")} 个项目，合并后图片 {stats.get("merged_images")} 张',
-                    )
-                    for p in stats.get('projects') or []:
-                        train_log(
-                            job,
-                            f'  - 项目「{p.get("title")}」(#{p.get("id")})：'
-                            f'图片 {p.get("images")} 张，可配对标签 {p.get("paired")}',
-                        )
-                except Exception:
-                    logger.exception('read export_stats failed')
-
-            train_log(job, '-------- 数据集划分 --------')
-            _, data_ref = build_dataset(
-                export_dir, data_name, config.task_type, config.classes,
-                job_id=job.id, log_fn=lambda msg: train_log(job, msg),
-            )
-            job.status = 'training'
-            job.save(update_fields=['status', 'updated_at'])
-
-            # params 里可能含 model_pt/model_yaml/task_type，避免与显式参数冲突
-            train_kwargs = {
-                k: v for k, v in (params or {}).items()
-                if k not in ('model_pt', 'model_yaml', 'task_type', 'data_yaml', 'job')
-            }
-            run_training(
-                job=job,
-                model_yaml=config.model_yaml,
-                model_pt=config.model_pt,
-                data_yaml=data_ref,
-                task_type=config.task_type,
-                **train_kwargs,
-            )
-
-            job.refresh_from_db()
-            if job.stop_requested:
-                job.status = 'stopped'
-            else:
-                job.status = 'completed'
-                job.progress = 100
-            job.save(update_fields=['status', 'progress', 'updated_at'])
-        except TrainingStopped as e:
-            logger.info('training stopped: %s', e)
-            job.status = 'stopped'
-            job.error_message = str(e)
-            job.save(update_fields=['status', 'error_message', 'updated_at'])
-        except Exception as e:
-            logger.exception('训练失败：%s', e)
-            job.status = 'failed'
-            job.error_message = str(e)
-            job.save(update_fields=['status', 'error_message', 'updated_at'])
-        finally:
-            close_old_connections()
-            if cleanup_dir and os.path.exists(cleanup_dir):
-                shutil.rmtree(cleanup_dir, ignore_errors=True)
-            if os.path.exists(dataset_root):
-                shutil.rmtree(dataset_root, ignore_errors=True)
-            elif os.path.exists(dataset_dir):
-                shutil.rmtree(dataset_dir, ignore_errors=True)
-            if os.path.isfile(data_yaml_path):
-                try:
-                    os.remove(data_yaml_path)
-                except OSError:
-                    logger.exception('删除 data.yaml 失败: %s', data_yaml_path)
+        execute_training_job(job.id, export_dir, cleanup_dir, config_dict, params)
 
     threading.Thread(target=_train, daemon=True).start()
+
+
+def _dispatch_training(job, config, params, export_dir, cleanup_dir):
+    """导出完成后调度训练：优先 RQ training 队列，失败或 local 则本机线程。"""
+    config_dict = _config_to_dict(config)
+    params = dict(params or {})
+    executor = _training_executor()
+
+    from .transfer import data_mode, needs_packaging, pack_export_for_transfer
+
+    mode = data_mode()
+    params['data_mode'] = mode
+    if needs_packaging(mode):
+        try:
+            meta = pack_export_for_transfer(job.id, export_dir, cleanup_dir, mode=mode)
+            params.update(meta)
+            job.params = params
+            job.save(update_fields=['params', 'updated_at'])
+            logger.info('任务 #%s 已打包导出（%s）: %s', job.id, mode, meta.get('package_path'))
+            if cleanup_dir and os.path.isdir(cleanup_dir):
+                shutil.rmtree(cleanup_dir, ignore_errors=True)
+                cleanup_dir = None
+                export_dir = None
+        except Exception:
+            logger.exception('打包导出失败 job=%s', job.id)
+            raise
+
+    if executor == 'local':
+        logger.info('TRAINING_EXECUTOR=local，任务 #%s 本机线程执行', job.id)
+        _start_train_local_thread(job, config_dict, params, export_dir, cleanup_dir)
+        return
+
+    try:
+        import django_rq
+        from core.redis import redis_connected
+
+        if not redis_connected():
+            raise RuntimeError('Redis 未连接')
+
+        queue_name = _training_queue_name()
+        timeout = int(getattr(django_settings, 'TRAINING_JOB_TIMEOUT', 48 * 3600))
+        queue = django_rq.get_queue(queue_name)
+        rq_job = queue.enqueue(
+            execute_training_job,
+            job.id,
+            export_dir,
+            cleanup_dir,
+            config_dict,
+            params,
+            job_timeout=timeout,
+            result_ttl=86400,
+            failure_ttl=getattr(django_settings, 'RQ_FAILED_JOB_TTL', 30 * 24 * 3600),
+            description=f'train job #{job.id} {config_dict.get("name")}',
+        )
+        params['rq_job_id'] = rq_job.id
+        job.params = params
+        job.save(update_fields=['params', 'updated_at'])
+        logger.info(
+            '训练任务 #%s 已入队 queue=%s rq_job=%s export=%s mode=%s',
+            job.id, queue_name, rq_job.id, export_dir, mode,
+        )
+    except Exception as e:
+        logger.warning(
+            'RQ 入队失败（%s），回退本机线程执行任务 #%s', e, job.id, exc_info=True,
+        )
+        _start_train_local_thread(job, config_dict, params, export_dir, cleanup_dir)
 
 
 class TrainWeightsAPI(APIView):
@@ -852,7 +839,7 @@ class TrainStartAPI(APIView):
         )
         job.projects.set(projects)
 
-        _start_train_thread(job, runtime_config, params, export_dir, cleanup_dir)
+        _dispatch_training(job, runtime_config, params, export_dir, cleanup_dir)
         return Response(job.to_dict(detail=True), status=status.HTTP_201_CREATED)
 
 
@@ -985,6 +972,20 @@ class TrainJobStopAPI(APIView):
         job.stop_requested = True
         job.status = 'stopped'
         job.save(update_fields=['stop_requested', 'status', 'updated_at'])
+
+        # 若已入队 RQ，尝试取消排队中的 job；已在跑的任务靠 stop_requested 优雅退出
+        rq_job_id = (job.params or {}).get('rq_job_id')
+        if rq_job_id:
+            try:
+                import django_rq
+                from core.redis import delete_job_by_id, redis_connected
+
+                if redis_connected():
+                    queue = django_rq.get_queue(_training_queue_name())
+                    delete_job_by_id(queue, rq_job_id)
+            except Exception:
+                logger.debug('cancel RQ job %s failed', rq_job_id, exc_info=True)
+
         return Response(job.to_dict())
 
 
@@ -1039,3 +1040,101 @@ class TrainJobArtifactAPI(APIView):
             return Response({'error': '产物文件不存在'}, status=404)
         filename = os.path.basename(path)
         return FileResponse(open(path, 'rb'), content_type='image/png', filename=filename)
+
+
+def _check_worker_token(request):
+    from .transfer import worker_token
+    expected = worker_token()
+    if not expected:
+        return False
+    got = request.headers.get('X-Training-Token') or request.META.get('HTTP_X_TRAINING_TOKEN')
+    return bool(got) and got == expected
+
+
+class TrainJobPackageAPI(APIView):
+    """GET /api/train/jobs/{id}/package — 训练服拉取导出 zip（X-Training-Token）"""
+    authentication_classes = []
+    permission_classes = []
+    swagger_schema = None
+
+    def get(self, request, job_id):
+        if not _check_worker_token(request):
+            return Response({'error': 'unauthorized'}, status=401)
+        job = TrainingJob.objects.filter(id=job_id).first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+        from .transfer import xfer_job_dir
+        zip_path = os.path.join(xfer_job_dir(job.id), 'export.zip')
+        package_path = (job.params or {}).get('package_path') or zip_path
+        if not os.path.isfile(package_path):
+            return Response({'error': '导出包不存在，请确认 TRAINING_DATA_MODE=http 且已打包'}, status=404)
+        return FileResponse(
+            open(package_path, 'rb'),
+            as_attachment=True,
+            filename=f'job_{job.id}_export.zip',
+        )
+
+
+class TrainJobReceiveArtifactsAPI(APIView):
+    """POST /api/train/jobs/{id}/receive-artifacts — 训练服回传 best.pt 等"""
+    authentication_classes = []
+    permission_classes = []
+    swagger_schema = None
+
+    def post(self, request, job_id):
+        if not _check_worker_token(request):
+            return Response({'error': 'unauthorized'}, status=401)
+        job = TrainingJob.objects.filter(id=job_id).first()
+        if not job:
+            return Response({'error': '任务不存在'}, status=404)
+
+        from .transfer import xfer_job_dir
+        dest_root = os.path.join(xfer_job_dir(job.id), 'artifacts')
+        os.makedirs(dest_root, exist_ok=True)
+
+        saved = []
+        artifacts = dict(job.artifacts or {})
+
+        for key, uploaded in request.FILES.items():
+            safe_name = os.path.basename(uploaded.name) or key
+            dest = os.path.join(dest_root, safe_name)
+            with open(dest, 'wb') as out:
+                for chunk in uploaded.chunks():
+                    out.write(chunk)
+            saved.append(safe_name)
+
+            if key.startswith('model_'):
+                variant = key[len('model_'):] or 'model'
+                # 更新或创建 TrainedModel 指向标注服本地路径
+                existing = None
+                for m in job.models.all():
+                    v = (m.metrics or {}).get('variant') or ''
+                    if v == variant or (not v and variant in (m.name or '').lower()):
+                        existing = m
+                        break
+                size = os.path.getsize(dest)
+                if existing:
+                    existing.file_path = dest
+                    existing.name = safe_name
+                    existing.file_size = size
+                    metrics = dict(existing.metrics or {})
+                    metrics['variant'] = variant
+                    existing.metrics = metrics
+                    existing.save(update_fields=['file_path', 'name', 'file_size', 'metrics'])
+                else:
+                    TrainedModel.objects.create(
+                        job=job,
+                        name=safe_name,
+                        file_path=dest,
+                        file_size=size,
+                        metrics={'variant': variant},
+                    )
+            elif key.startswith('artifact_'):
+                art_key = key[len('artifact_'):]
+                artifacts[art_key] = dest
+
+        if artifacts != (job.artifacts or {}):
+            job.artifacts = artifacts
+            job.save(update_fields=['artifacts', 'updated_at'])
+
+        return Response({'ok': True, 'saved': saved, 'count': len(saved)})

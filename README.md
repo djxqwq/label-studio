@@ -108,7 +108,8 @@
 - **数据划分**：与 `cv-ultralytics` 原仓库一致 — **训练集 80% / 验证集 15% / 测试集 5%**
 - **预训练权重**：本地 `cv-ultralytics/.../models/` 有对应 `.pt` 则直接用，否则走国内镜像竞速下载
 - **产物**：可下载 `best.pt` / `last.pt`，并展示 F1 等训练曲线（若生成）
-- **GPU 支持**：Docker 部署可透传 NVIDIA GPU
+- **训练调度**：标注服导出后入队 Redis `training` 队列；GPU 机上的 RQ Worker 执行训练（也可单机同 compose 跑 `training-worker`）
+- **GPU 支持**：`training-worker` 服务透传 NVIDIA GPU（标注服 `app` 无需 GPU）
 
 支持的训练任务类型：
 - `obb`：旋转边界框检测（Oriented Bounding Box）
@@ -120,140 +121,325 @@
 
 ## 如何启动
 
-### 方式一：Docker Compose（推荐）
+下面按场景说明：**文件怎么放**、**本地开发怎么跑**、**双机要改什么**。
 
-使用 Docker Compose 启动完整的生产级栈（Label Studio + Nginx + PostgreSQL），**已配置 GPU 支持**：
+### 0. 三种用法对照（先选一种）
 
-```bash
-# 1. 构建并启动所有服务
-docker compose up --build
+| 场景 | 机器 | 数据怎么到训练进程 | 你要改/设的 |
+|------|------|-------------------|-------------|
+| **本地开发** | 你自己电脑 | 本机目录直读 | `TRAINING_EXECUTOR=local`（最简单） |
+| **单机 Docker** | 一台有 GPU 的机 | compose 同机挂 `mydata` + `cv-ultralytics` | 基本不用改，`docker compose up` |
+| **双机（标注 + GPU）** | A 标注、B 训练 | **SSH/SCP** 拉包/回传（不搞共享盘） | A/B 各一份仓库；B 配 SSH + DB/Redis 地址 |
 
-# 2.（首次启动 / 有新迁移时）运行数据库迁移（含 training 应用）
-docker compose run app python3 /label-studio/label_studio/manage.py migrate
+业务使用始终一样：浏览器打开标注服 → Projects → **Train**。
 
-# 3.（首次启动）创建超级管理员
-docker compose run app python3 /label-studio/label_studio/manage.py createsuperuser
+---
 
-# 4.（可选）收集静态文件
-docker compose run app python3 /label-studio/label_studio/manage.py collectstatic
+### 1. 文件怎么分配
+
+#### 仓库里始终要有的
+
+```text
+label-studio/                 ← git clone 下来的项目根
+├── label_studio/             ← 后端（两边都要）
+├── web/                      ← 前端源码（改 UI 才需要）
+├── cv-ultralytics/           ← 训练引擎（有 GPU 训练的机器必须有）
+├── docker-compose.yml        ← 标注服 / 单机全栈
+├── docker-compose.training.yml  ← 仅训练服 Worker
+├── docker-compose.dev.yml    ← 本地/开发挂载代码
+└── mydata/                   ← 运行后产生（标注服数据，勿提交）
 ```
 
-启动后访问 `http://localhost:8080`。
+#### 本地开发 / 单机 Docker（一份目录即可）
 
-数据持久化目录为 `./mydata`（SQLite 数据库、上传文件等）。PostgreSQL 数据存储在 `./postgres-data`。训练引擎目录 `./cv-ultralytics` 已自动挂载到容器内（须保证仓库内存在该目录）。
-
-**训练相关注意：**
-- Docker 镜像构建时已安装训练依赖（`torch`/`torchvision` CUDA 11.8 + `ultralytics` + `opencv`），**容器内一般不用再 pip**
-- 宿主机侧主要确认：**NVIDIA 驱动 + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)**（让容器能用 GPU）；不必在宿主机再装一套 CUDA Toolkit 才能训练
-- 首次训练若本地没有对应预训练 `.pt`，会自动从国内镜像下载到 `cv-ultralytics/ultralytics/ultralytics/models/`
-- 可用环境变量 `YOLO_WEIGHTS_MIRRORS` 自定义镜像列表（`{file}` / `{github}` 占位符）
-- 前端有改动时需重新构建：`cd web && yarn install && yarn run build`（或镜像内构建）
-
-**GPU 要求：**
-- `docker-compose.yml` 已配置 GPU 透传（`deploy.resources.reservations.devices`）
-- Dockerfile 使用 CUDA 11.8 版 PyTorch wheel；驱动过旧可能无法使用 GPU，需升级驱动或改镜像内 PyTorch CUDA 版本
-
-**开发模式（支持前端 HMR 热更新）：**
-
-```bash
-# 1. 设置开发环境配置
-make docker-dev-setup
-
-# 2. 构建并启动
-docker compose up --build
+```text
+/你的路径/label-studio/
+├── mydata/                   ← 上传、导出、训练回传的 zip/pt
+│   └── media/training_xfer/  ← SSH 模式下的导出包与回传模型
+├── cv-ultralytics/           ← 权重、runs、trained_models
+├── postgres-data/            ← 仅 Docker
+└── redis-data/               ← 仅 Docker
 ```
 
-这将自动创建 `.env` 和 `docker-compose.override.yml`，启用前端热模块替换（HMR），前端开发服务器运行在 `http://localhost:8081`。
+单机时 app 与 `training-worker` **共用**上面这些目录，路径不用对两台机器。
 
-### 方式二：本地开发（不使用 Docker）
+#### 双机（A 标注服 + B GPU 训练服，SSH，无共享盘）
 
-> **注意**：本地开发要求 **Python 3.10+**、**Node 22+**、**GCC 9.3+**。CentOS 7 等老系统因 glibc/GCC 版本过低，无法本地运行，请使用 Docker 方案。
+**标注服 A**（放网页数据，可无 GPU、可不放完整训练权重）：
 
-#### 后端
+```text
+/opt/label-studio/            ← 建议绝对路径，后面填进 TRAINING_SSH_REMOTE_DATA
+├── label_studio/ …           ← 代码
+├── docker-compose.yml
+├── mydata/                   ← 必须；导出 zip、回传 best.pt 都落这里
+│   └── media/training_xfer/job_<id>/
+│       ├── export.zip        ← 启动训练后由 A 打好
+│       └── artifacts/        ← B scp 回来的 best.pt 等
+├── postgres-data/
+├── redis-data/
+└── cv-ultralytics/           ← 可选（A 不训练可很瘦）
+```
 
-`pyproject.toml` / `poetry install` **不包含**下列 YOLO 训练核心包（因 CentOS7 glibc 等与 poetry 锁定的 nvidia wheel 不兼容，已刻意剥离），本地必须额外用 pip 安装：
+**训练服 B**（只跑 Worker + GPU）：
 
-| 包 | 是否在 pyproject | 说明 |
-|----|------------------|------|
-| `torch` / `torchvision` | ❌ 需单独 pip | GPU 用 cu118 源；CPU 用清华源即可 |
-| `ultralytics` | ❌ 需单独 pip | 会顺带拉取 scipy / matplotlib 等 |
-| `opencv-python-headless` | ✅ 已在 poetry | `poetry install` 即可 |
-| `py-cpuinfo` | ✅ 已在 poetry | `poetry install` 即可 |
+```text
+/opt/label-studio/            ← 同一份代码仓库（或同镜像）
+├── docker-compose.training.yml
+├── cv-ultralytics/           ← 必须；本机训练 runs/权重（不必和 A 同步）
+├── ssh/
+│   └── id_rsa                ← 私钥，chmod 600；公钥已放到 A 的 authorized_keys
+└── （不必有 mydata；数据靠 scp 临时拉取）
+```
+
+| 东西 | 放哪 | 说明 |
+|------|------|------|
+| 用户上传 / 标注数据 | **仅 A** `mydata/` | 浏览器只打 A |
+| 导出 zip | **A** `mydata/media/training_xfer/` | B 用 scp 拉 |
+| `best.pt` 下载用 | **最终在 A** 同目录 `artifacts/` | B 训完 scp 回去 |
+| YOLO 训练过程文件 | **B** `cv-ultralytics/` | runs 可只留在 B |
+| Postgres / Redis | **A**（或独立机） | B 只连过去，不另起库 |
+| SSH 私钥 | **仅 B** `ssh/id_rsa` | 不要提交 git |
+
+`TRAINING_SSH_REMOTE_DATA` = A 宿主机上 **mydata 的绝对路径**，例如 `/opt/label-studio/mydata`（不要填容器内路径）。
+
+---
+
+### 2. 本地开发模式（推荐调试时用）
+
+目标：改代码立刻生效；训练可用本机线程，不必先搭 Redis/双机。
+
+> 需要 **Python 3.10+**、**Node 22+**、**GCC 9.3+**。CentOS 7 请用 Docker。
+
+#### 2.1 你要改什么（环境变量）
+
+本地**最少**这样（写进 shell 或项目根 `.env`，按你们 `make run-dev` 是否自动加载为准）：
 
 ```bash
-# 1. 安装 Poetry
+# 必改/建议
+export DJANGO_DB=sqlite
+export DJANGO_SETTINGS_MODULE=core.settings.label_studio
+export TRAINING_EXECUTOR=local          # ← 关键：不入队，本机线程直接训
+export TRAINING_DATA_MODE=shared        # 本地同盘，不要设 ssh
+# 可选
+export CV_ULTRA_PATH=/你的路径/label-studio/cv-ultralytics
+export DEBUG=1
+```
+
+若要用 RQ（本机 Redis + Worker）而不是 `local`：
+
+```bash
+export TRAINING_EXECUTOR=rq
+export TRAINING_DATA_MODE=shared
+export REDIS_HOST=127.0.0.1
+export REDIS_PORT=6379
+# 另开终端：redis-server
+# 再开终端：poetry run python label_studio/manage.py rqworker training
+```
+
+本地开发**不要**设 `TRAINING_DATA_MODE=ssh`（没有第二台机 scp）。
+
+#### 2.2 后端安装与启动
+
+`poetry` **不含** `torch`/`ultralytics`，须额外 pip：
+
+```bash
 pip install poetry
-
-# 2. 安装项目基础依赖（含 opencv-python-headless、py-cpuinfo；不含 torch/ultralytics）
 poetry install
 
-# 3. 安装 pyproject 之外的 YOLO 训练依赖（必做，否则无法训练）
-#    GPU（CUDA 11.8 wheel，需本机有可用 NVIDIA 驱动）：
+# GPU
 pip install torch torchvision --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu118
 pip install ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 或 CPU：pip install torch torchvision ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-#    若用 poetry 虚拟环境，请装进同一环境，例如：
-# poetry run pip install torch torchvision --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu118
-# poetry run pip install ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-#    CPU 版本（无 GPU 或仅调试）：
-# pip install torch torchvision ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-# 4. 运行数据库迁移（首次启动必须执行，含 training）
 DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
   poetry run python label_studio/manage.py migrate
-
-# 5. 创建超级管理员（首次启动）
 DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
   poetry run python label_studio/manage.py createsuperuser
 
-# 6. 收集静态文件
-DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
-  poetry run python label_studio/manage.py collectstatic
+# 本机线程训练（最省事）
+TRAINING_EXECUTOR=local TRAINING_DATA_MODE=shared make run-dev
+# 或：
+# TRAINING_EXECUTOR=local DJANGO_DB=sqlite DJANGO_SETTINGS_MODULE=core.settings.label_studio \
+#   poetry run python label_studio/manage.py runserver 0.0.0.0:8080
+```
 
-# 7. 启动开发服务器（SQLite 模式）
+Makefile 常用：
+
+```bash
+make env-dev-setup   # 生成 .env
+make migrate-dev
 make run-dev
 ```
 
-或使用 Makefile 快捷命令：
+#### 2.3 前端
 
 ```bash
-make env-dev-setup   # 创建 .env 文件
-make run-dev          # 启动 Django 开发服务器（SQLite）
-make migrate-dev      # 运行迁移（SQLite）
-make shell-dev        # Django shell
-```
-
-#### 前端
-
-> 前端需要 **Node 22+**（项目使用 Node 22 构建）。
-
-```bash
-# 1. 安装前端依赖
 cd web && yarn install
-
-# 2. 启动前端开发服务器（HMR 模式）
-cd web && yarn run dev
-
-# 3.（或）构建生产前端包
-cd web && yarn run build
+cd web && yarn run build          # 改完 Train 页等必须 build，或
+cd web && yarn run dev            # HMR；后端需在 8080
 ```
 
-前端开发模式下，后端需在 `http://localhost:8080` 运行，前端 HMR 服务在 `http://localhost:8010`。
+#### 2.4 Docker 开发挂载（可选）
 
-### 方式三：Docker 单容器
+代码挂进容器、改 Python 不用重建镜像：
 
 ```bash
-# 构建镜像（已包含 YOLO 训练依赖）
-docker build -t label-studio:latest .
+make docker-dev-setup
+# 默认 TRAINING_DATA_MODE=shared；单机调试可：
+# export TRAINING_EXECUTOR=local
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
 
-# 运行（需挂载数据目录和训练引擎目录）
+---
+
+### 3. 单机 Docker（生产形态、一台有 GPU）
+
+文件：仓库旁 `./mydata`、`./cv-ultralytics` 即可，**一般不用改环境变量**。
+
+```bash
+docker compose up --build -d
+docker compose run app python3 /label-studio/label_studio/manage.py migrate
+docker compose run app python3 /label-studio/label_studio/manage.py createsuperuser
+```
+
+访问 `http://localhost:8080`。会起 nginx、app、db、redis、`training-worker`（GPU）。
+
+| 目录 | 作用 |
+|------|------|
+| `./mydata` | 上传、导出临时目录 |
+| `./postgres-data` | 库 |
+| `./redis-data` | 训练队列 |
+| `./cv-ultralytics` | 训练引擎与权重 |
+
+- 镜像已含 torch（CUDA 11.8）+ ultralytics  
+- 宿主机需 NVIDIA 驱动 + [Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)  
+- 无 Worker / 无 Redis 时入队失败会回退本机线程；调试可 `TRAINING_EXECUTOR=local`
+
+---
+
+### 4. 双机部署（标注服 A + 训练服 B，SSH）
+
+```text
+浏览器 → A:8080 (nginx+app+db+redis) → 入队 Redis
+GPU 机 B (rqworker) --scp 拉 export.zip→ 训练 --scp 回 best.pt→ A
+```
+
+#### 4.1 使用前要改什么
+
+**标注服 A**（`.env` 或 export）：
+
+```bash
+TRAINING_EXECUTOR=rq
+TRAINING_DATA_MODE=ssh          # ← 启动训练时打 zip，供 B 拉取
+# 不要起 training-worker
+```
+
+并把 **Postgres 5432、Redis 6379** 暴露给 B（compose 给 `db`/`redis` 加 `ports`，或独立部署）。  
+训练服公钥写入 A：`~/.ssh/authorized_keys`，且能读 A 的 `mydata`。
+
+**训练服 B**：
+
+```bash
+POSTGRE_HOST=192.168.1.10       # A 的库
+REDIS_HOST=192.168.1.10
+TRAINING_DATA_MODE=ssh
+TRAINING_SSH_HOST=192.168.1.10  # A 的 SSH
+TRAINING_SSH_USER=root
+TRAINING_SSH_PORT=22
+TRAINING_SSH_KEY=/ssh/id_rsa
+TRAINING_SSH_REMOTE_DATA=/opt/label-studio/mydata   # ← A 宿主机 mydata 绝对路径
+TRAINING_ANNOTATION_DATA_DIR=/label-studio/data     # A 容器内路径，一般不用改
+```
+
+#### 4.2 启动命令
+
+**A：**
+
+```bash
+cd /opt/label-studio
+export TRAINING_DATA_MODE=ssh
+docker compose up -d --build nginx app db redis
+docker compose run app python3 /label-studio/label_studio/manage.py migrate
+```
+
+**B：**
+
+```bash
+cd /opt/label-studio
+mkdir -p ssh && chmod 700 ssh
+# 放入私钥 ./ssh/id_rsa && chmod 600 ./ssh/id_rsa
+
+export POSTGRE_HOST=192.168.1.10
+export REDIS_HOST=192.168.1.10
+export TRAINING_DATA_MODE=ssh
+export TRAINING_SSH_HOST=192.168.1.10
+export TRAINING_SSH_USER=root
+export TRAINING_SSH_KEY=/ssh/id_rsa
+export TRAINING_SSH_REMOTE_DATA=/opt/label-studio/mydata
+
+docker compose -f docker-compose.training.yml up -d --build
+```
+
+改过 Dockerfile（含 `openssh-client`）后 B 需重新 `--build`。
+
+#### 4.3 SSH 路径对照
+
+| 位置 | 路径 |
+|------|------|
+| A 宿主机导出包 | `{TRAINING_SSH_REMOTE_DATA}/media/training_xfer/job_<id>/export.zip` |
+| A 容器内（网页下载） | `/label-studio/data/media/training_xfer/job_<id>/artifacts/best.pt` |
+| B | `./cv-ultralytics`（本地训练，可不与 A 同步） |
+
+#### 4.4 环境变量一览
+
+| 变量 | 默认 | 谁要设 | 说明 |
+|------|------|--------|------|
+| `TRAINING_EXECUTOR` | `rq` | 本地调试改 `local` | `rq` 入队；`local` 本机线程 |
+| `TRAINING_QUEUE` | `training` | 一般不改 | RQ 队列名 |
+| `TRAINING_DATA_MODE` | `shared` | 双机改 **`ssh`** | `shared` / `ssh` / `http` |
+| `TRAINING_SSH_HOST` | 空 | **B** | 标注服 SSH |
+| `TRAINING_SSH_USER` | `root` | B | SSH 用户 |
+| `TRAINING_SSH_PORT` | `22` | B | 端口 |
+| `TRAINING_SSH_KEY` | 空 | **B** | 容器内私钥，如 `/ssh/id_rsa` |
+| `TRAINING_SSH_REMOTE_DATA` | 空 | **B** | A 宿主机 `mydata` 绝对路径 |
+| `TRAINING_ANNOTATION_DATA_DIR` | `/label-studio/data` | B | A 容器数据根（写 DB） |
+| `REDIS_HOST` / `PORT` | localhost | 双机 B 填 A | 共用队列 |
+| `POSTGRE_HOST` 等 | — | 双机 B 填 A | 共用库 |
+| `CV_ULTRA_PATH` | 仓库内路径 | 有训练的机器 | 训练引擎根目录 |
+
+---
+
+### 5. 日常使用（网页）
+
+与部署方式无关，只访问**标注服**：
+
+1. 登录 → Projects → **Train**
+2. 选配置、项目、YOLO 版本/尺寸 → 启动  
+3. 任务里看日志 / 停止 / 下载 `best.pt`、`last.pt`
+
+| 现象 | 先查 |
+|------|------|
+| 任务一直不动 | B 的 worker 没起，或 Redis 地址错 |
+| 失败「导出目录不可读」/ scp 失败 | `TRAINING_SSH_*`、A 上 `mydata` 路径、SSH 免密 |
+| 训完下不了模型 | 回传 scp 失败；看 B 日志 |
+| 本地想省事 | `TRAINING_EXECUTOR=local` |
+
+---
+
+### 6. Docker 单容器（极简）
+
+```bash
+docker build -t label-studio:latest .
 docker run -it -p 8080:8080 \
   -v $(pwd)/mydata:/label-studio/data \
   -v $(pwd)/cv-ultralytics:/label-studio/cv-ultralytics \
   --gpus all \
   label-studio:latest
 ```
+
+此时建议容器内 `TRAINING_EXECUTOR=local`（没有单独 worker 时）。
+
+---
 
 ## 更新项目
 
@@ -441,10 +627,9 @@ curl -H "Authorization: Token <token>" \
 
 ```
 label-studio/
-├── cv-ultralytics/                # ✨ YOLO 训练引擎
-│   ├── train/                     # 训练脚本
-│   ├── datasets_process/          # 数据处理工具
-│   └── ultralytics/               # YOLO 框架
+├── cv-ultralytics/                # ✨ YOLO 训练引擎（仅保留平台用到的子集）
+│   ├── datasets_process/utils/group_img.py  # ✨ 数据集划分
+│   └── ultralytics/               # YOLO 框架源码
 ├── label_studio/                  # Django 后端
 │   ├── core/
 │   │   ├── permissions.py         # ✏️ 权限体系改造（Superuser 权限）
@@ -466,7 +651,11 @@ label-studio/
 │   │   ├── models.py              # ✏️ access_token 安全获取
 │   ├── jwt_auth/models.py         # ✏️ created_by_id 修复
 │   ├── training/                  # ✨ 训练模块
-│   │   ├── api.py                 # ✨ 训练 API（多项目启动、任务、配置、权重）
+│   │   ├── api.py                 # ✨ 训练 API（导出后 RQ 入队 / 本机回退）
+│   │   ├── rq_jobs.py             # ✨ RQ Worker 入口（build_dataset + run_training）
+│   │   ├── jobs.py                # ✨ rq_jobs 别名（分机方案）
+│   │   ├── transfer.py            # ✨ 共享盘 / 内网拉包与产物回传
+│   │   ├── paths.py               # ✨ 共享盘路径约定（DATA_ROOT / CV_ULTRA）
 │   │   ├── models.py              # ✨ 训练任务、模型配置、训练日志、训练模型
 │   │   ├── tasks.py               # ✨ 数据集划分 + YOLO 训练执行
 │   │   ├── weights.py             # ✨ 预训练权重命名 / 国内镜像下载
@@ -492,7 +681,8 @@ label-studio/
 │   │   │       └── TrainingPage.scss # ✨ 训练页面样式
 │   ├── libs/core/src/types/user.ts # ✏️ 新增 is_superuser 类型
 │   └── ...
-├── docker-compose.yml              # 生产部署配置（已配置 GPU 支持）
+├── docker-compose.yml              # app + redis + training-worker（GPU）
+├── docker-compose.training.yml     # ✨ 仅 GPU 训练服 RQ Worker
 ├── Dockerfile                      # 生产镜像构建（已包含 YOLO 训练依赖）
 ├── Dockerfile.development          # 开发镜像构建
 ├── Makefile                        # 开发快捷命令

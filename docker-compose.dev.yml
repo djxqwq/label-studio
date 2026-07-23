@@ -4,6 +4,8 @@ services:
   app:
     environment:
       - LABEL_STUDIO_DEBUG=true
+      - REDIS_HOST=redis
+      - TRAINING_EXECUTOR=${TRAINING_EXECUTOR:-rq}
     volumes:
       # 保持原有挂载
       - ./mydata:/label-studio/data:rw
@@ -13,3 +15,11 @@ services:
     # 使用 Django runserver（支持热重载），替代 uwsgi
     command: >
       python3 /label-studio/label_studio/manage.py runserver 0.0.0.0:8000
+
+  training-worker:
+    environment:
+      - REDIS_HOST=redis
+    volumes:
+      - ./mydata:/label-studio/data:rw
+      - ./cv-ultralytics:/label-studio/cv-ultralytics:rw
+      - ./label_studio:/label-studio/label_studio:rw

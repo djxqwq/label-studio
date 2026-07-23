@@ -1,2 +1,2 @@
+# 平台训练主要依赖（Docker/本地仍建议按 README 单独安装 torch）
 ultralytics>=8.2.45
-segment-anything

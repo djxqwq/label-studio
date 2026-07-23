@@ -137,7 +137,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update; \
     apt-get upgrade -y; \
     apt-get install --no-install-recommends -y libexpat1 libgl1 libglx-mesa0 libglib2.0-0t64 \
-        gnupg2 curl nginx; \
+        gnupg2 curl nginx openssh-client; \
     apt-get autoremove -y
 
 # YOLO 训练依赖（GPU版本 - CUDA 11.8）

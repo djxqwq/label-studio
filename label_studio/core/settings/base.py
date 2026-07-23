@@ -369,6 +369,13 @@ RQ_QUEUES = {
         'DB': 0,
         'DEFAULT_TIMEOUT': 180,
     },
+    # YOLO 训练（长超时）；opensource label_studio.py 会按 REDIS_* 覆盖整表
+    'training': {
+        'HOST': 'localhost',
+        'PORT': 6379,
+        'DB': 0,
+        'DEFAULT_TIMEOUT': int(get_env('TRAINING_JOB_TIMEOUT', 48 * 3600)),
+    },
 }
 
 # How long to keep failed RQ jobs (in seconds); default is 30 days

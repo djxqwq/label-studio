@@ -1,0 +1,53 @@
+# 仅在 GPU 训练服上启动 RQ Worker（标注服另机跑 app/nginx/db/redis）
+#
+# 无共享盘：用 SSH/SCP 从标注服拉 export.zip，训完再 scp 回传 best.pt
+#
+# 用法：
+#   export POSTGRE_HOST=<标注服 DB IP>
+#   export REDIS_HOST=<Redis IP>
+#   export TRAINING_SSH_HOST=<标注服 SSH IP>
+#   export TRAINING_SSH_REMOTE_DATA=/opt/label-studio/mydata   # 标注服宿主机 mydata
+#   export TRAINING_SSH_KEY=/ssh/id_rsa
+#   # 把私钥放到 ./ssh/id_rsa（chmod 600）
+#   docker compose -f docker-compose.training.yml up -d --build
+#
+services:
+  training-worker:
+    build: .
+    image: heartexlabs/label-studio:latest
+    restart: unless-stopped
+    environment:
+      - DJANGO_DB=default
+      - POSTGRE_NAME=${POSTGRE_NAME:-postgres}
+      - POSTGRE_USER=${POSTGRE_USER:-postgres}
+      - POSTGRE_PASSWORD=${POSTGRE_PASSWORD:-}
+      - POSTGRE_PORT=${POSTGRE_PORT:-5432}
+      - POSTGRE_HOST=${POSTGRE_HOST:?set POSTGRE_HOST to shared Postgres}
+      - REDIS_HOST=${REDIS_HOST:?set REDIS_HOST to shared Redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - TRAINING_QUEUE=${TRAINING_QUEUE:-training}
+      - TRAINING_DATA_MODE=${TRAINING_DATA_MODE:-ssh}
+      - TRAINING_SSH_HOST=${TRAINING_SSH_HOST:?set TRAINING_SSH_HOST}
+      - TRAINING_SSH_USER=${TRAINING_SSH_USER:-root}
+      - TRAINING_SSH_PORT=${TRAINING_SSH_PORT:-22}
+      - TRAINING_SSH_KEY=${TRAINING_SSH_KEY:-/ssh/id_rsa}
+      - TRAINING_SSH_REMOTE_DATA=${TRAINING_SSH_REMOTE_DATA:?set host path to annotation mydata}
+      - TRAINING_ANNOTATION_DATA_DIR=${TRAINING_ANNOTATION_DATA_DIR:-/label-studio/data}
+      - CV_ULTRA_PATH=/label-studio/cv-ultralytics
+      - JSON_LOG=1
+    volumes:
+      # 训练服本地 cv-ultralytics（权重/runs，不必与标注服共享）
+      - ${LOCAL_CV_ULTRA:-./cv-ultralytics}:/label-studio/cv-ultralytics:rw
+      # SSH 私钥（训练服 → 标注服）
+      - ${SSH_KEY_DIR:-./ssh}:/ssh:ro
+    command: >
+      python3 /label-studio/label_studio/manage.py rqworker
+      ${TRAINING_QUEUE:-training}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

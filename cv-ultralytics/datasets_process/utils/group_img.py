@@ -76,6 +76,20 @@ def split_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.8, valid_ra
         if test_size < 0:
             train_size += test_size
             test_size = 0
+        # 样本很少时 int(n*0.15) 可能为 0，至少保证 train/valid 各 1 张
+        if valid_size < 1 and total_data >= 2:
+            valid_size = 1
+            if train_size > 1:
+                train_size -= 1
+            elif test_size > 0:
+                test_size -= 1
+            else:
+                train_size = max(1, total_data - 1)
+                valid_size = total_data - train_size
+                test_size = 0
+        if train_size < 1:
+            train_size = 1
+            valid_size = max(0, total_data - 1 - test_size)
 
     log.info("---------- 分组统计 ----------")
     log.info(f"数据集总量：{total_data}")
@@ -186,11 +200,3 @@ def split_cls_dataset(src_dir: str, dst_dir: str, train_ratio: float = 0.85, val
         "分类数据集分割完成：train=%s val=%s test=%s classes=%s",
         len(splits['train']), len(splits['val']), len(splits['test']), class_names,
     )
-
-
-if __name__ == '__main__':
-    current_file_path = os.path.abspath(__file__)
-    parent_path = os.path.dirname(os.path.dirname(current_file_path))
-    src_dir = '/Users/senga/Downloads/茉莉花_0617'
-    dst_dir = os.path.join(parent_path, 'data')
-    split_dataset(src_dir, dst_dir)
