@@ -205,11 +205,6 @@ names:
     return dst, yaml_stem
 
 
-def _weight_mirror_urls(model_name: str):
-    from .weights import weight_mirror_urls
-    return weight_mirror_urls(model_name)
-
-
 def _download_model_weights(model_name: str, dest_dir: str, log_fn=None) -> str:
     from .weights import download_model_weights
     return download_model_weights(model_name, dest_dir=dest_dir, log_fn=log_fn)

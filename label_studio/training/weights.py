@@ -100,10 +100,6 @@ TASK_SUFFIX = {
     'cls': '-cls',
 }
 
-# 兼容旧常量
-YOLO_VERSIONS = list(YOLO_FAMILIES.keys())
-YOLO_SCALES = YOLO_FAMILIES['8']['scales']
-
 
 def models_dir() -> str:
     return os.environ.get('YOLO_MODELS_DIR', _MODELS_DIR)
